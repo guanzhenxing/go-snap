@@ -74,9 +74,8 @@ func (sec standardErrorCode) Reference() string {
 	return sec.ReferenceURL
 }
 
-// 错误码注册表和互斥锁
-var errorCodeRegistry = map[int]ErrorCode{}
-var registryMutex = &sync.Mutex{}
+// 错误码注册表使用sync.Map，提高并发性能
+var errorCodeRegistry sync.Map
 
 // UnknownError 是默认的错误码，用于没有特定错误码的错误。
 var (
@@ -128,12 +127,26 @@ func Register(ec ErrorCode) ErrorCode {
 		panic("错误码 `0` 已被 `go-snap` 保留用作 UnknownError 错误码")
 	}
 
-	registryMutex.Lock()
-	defer registryMutex.Unlock()
-
-	errorCodeRegistry[ec.Code()] = ec
-
+	errorCodeRegistry.Store(ec.Code(), ec)
 	return ec
+}
+
+// RegisterErrorCodes 批量注册错误码，提高初始化效率
+// 这对于在应用启动时一次性注册大量错误码特别有用
+//
+// 示例:
+//
+//	func init() {
+//	    errors.RegisterErrorCodes([]ErrorCode{
+//	        errors.NewErrorCode(InvalidParameter, http.StatusBadRequest, "无效参数", ""),
+//	        errors.NewErrorCode(ResourceNotFound, http.StatusNotFound, "资源未找到", ""),
+//	        // 更多错误码...
+//	    })
+//	}
+func RegisterErrorCodes(codes []ErrorCode) {
+	for _, code := range codes {
+		Register(code)
+	}
 }
 
 // MustRegister 注册用户定义的错误码，如果错误码已存在则会引发panic。
@@ -144,16 +157,30 @@ func MustRegister(ec ErrorCode) ErrorCode {
 		panic("错误码 '0' 已被 'go-snap' 保留用作 UnknownError 错误码")
 	}
 
-	registryMutex.Lock()
-	defer registryMutex.Unlock()
-
-	if _, ok := errorCodeRegistry[ec.Code()]; ok {
+	if _, exists := errorCodeRegistry.Load(ec.Code()); exists {
 		panic(fmt.Sprintf("错误码: %d 已存在", ec.Code()))
 	}
 
-	errorCodeRegistry[ec.Code()] = ec
-
+	errorCodeRegistry.Store(ec.Code(), ec)
 	return ec
+}
+
+// MustRegisterErrorCodes 批量注册错误码，如果有任何错误码已存在则会引发panic
+// 这对于确保应用程序启动时不会出现错误码冲突特别有用
+//
+// 示例:
+//
+//	func init() {
+//	    errors.MustRegisterErrorCodes([]ErrorCode{
+//	        errors.NewErrorCode(InvalidParameter, http.StatusBadRequest, "无效参数", ""),
+//	        errors.NewErrorCode(ResourceNotFound, http.StatusNotFound, "资源未找到", ""),
+//	        // 更多错误码...
+//	    })
+//	}
+func MustRegisterErrorCodes(codes []ErrorCode) {
+	for _, code := range codes {
+		MustRegister(code)
+	}
 }
 
 // RegisterErrorCode 创建并注册一个错误码
@@ -187,8 +214,8 @@ func GetErrorCodeFromError(err error) ErrorCode {
 	}
 
 	if v, ok := err.(interface{ Code() int }); ok {
-		if coder, ok := errorCodeRegistry[v.Code()]; ok {
-			return coder
+		if coder, ok := errorCodeRegistry.Load(v.Code()); ok {
+			return coder.(ErrorCode)
 		}
 	}
 
@@ -221,30 +248,27 @@ func IsErrorCode(err error, code int) bool {
 
 // ListErrorCodes 返回所有已注册错误码的列表。
 func ListErrorCodes() []int {
-	registryMutex.Lock()
-	defer registryMutex.Unlock()
+	var codeList []int
 
-	codeList := make([]int, 0, len(errorCodeRegistry))
-	for code := range errorCodeRegistry {
-		codeList = append(codeList, code)
-	}
+	errorCodeRegistry.Range(func(key, value interface{}) bool {
+		codeList = append(codeList, key.(int))
+		return true
+	})
+
 	return codeList
 }
 
 // GetErrorCode 返回指定错误码的ErrorCodeInfo。
 // 如果错误码未注册，则返回nil。
 func GetErrorCode(code int) ErrorCode {
-	registryMutex.Lock()
-	defer registryMutex.Unlock()
-
-	return errorCodeRegistry[code]
+	if coder, ok := errorCodeRegistry.Load(code); ok {
+		return coder.(ErrorCode)
+	}
+	return nil
 }
 
 // HasErrorCode 检查指定的错误码是否已注册。
 func HasErrorCode(code int) bool {
-	registryMutex.Lock()
-	defer registryMutex.Unlock()
-
-	_, ok := errorCodeRegistry[code]
+	_, ok := errorCodeRegistry.Load(code)
 	return ok
 }

@@ -51,51 +51,78 @@ func NewAggregate(errs []error) Aggregate {
 type aggregate []error
 
 // Error 实现error接口的一部分。
-func (aggr aggregate) Error() string {
-	if len(aggr) == 0 {
-		// 这实际上不应该发生。
+func (agg aggregate) Error() string {
+	if len(agg) == 0 {
+		// 这种情况不应发生，因为我们已过滤零错误的聚合。
 		return ""
 	}
-	if len(aggr) == 1 {
-		return aggr[0].Error()
+
+	if len(agg) == 1 {
+		// 单个错误的聚合直接返回原始错误消息，不加方括号
+		return agg[0].Error()
 	}
 
-	// 使用map[string]struct{}替代StringSet
-	uniqueErrors := make(map[string]struct{})
-	result := ""
-
-	for _, err := range aggr {
+	seenErrs := make(map[string]struct{})
+	result := "["
+	for i, err := range agg {
 		msg := err.Error()
-		if _, seen := uniqueErrors[msg]; seen {
+		if _, ok := seenErrs[msg]; ok {
 			continue
 		}
-		uniqueErrors[msg] = struct{}{}
-		if len(uniqueErrors) > 1 {
+		seenErrs[msg] = struct{}{}
+
+		if i > 0 {
 			result += ", "
 		}
 		result += msg
 	}
+	result += "]"
 
-	if len(uniqueErrors) == 1 {
-		return result
+	// 特殊情况：如果去重后只有一个错误消息，去掉方括号
+	if len(seenErrs) == 1 {
+		return result[1 : len(result)-1]
 	}
-	return "[" + result + "]"
+
+	return result
 }
 
-// Is 报告聚合中的任何错误是否与目标匹配。
-// 此实现与Go 1.13+的errors.Is兼容。
-func (aggr aggregate) Is(target error) bool {
-	for _, err := range aggr {
+// Errors 返回组成这个聚合的所有错误。
+func (agg aggregate) Errors() []error {
+	return []error(agg)
+}
+
+// Is 实现了errors.Is接口。如果target在错误聚合中的任何错误中找到，则返回true。
+// 如果target本身是一个错误聚合，则必须包含完全相同的错误集（顺序无关）。
+func (agg aggregate) Is(target error) bool {
+	// 如果目标是另一个聚合错误，则检查它们是否包含相同的错误集
+	targetAgg, ok := target.(Aggregate)
+	if ok {
+		targetErrs := targetAgg.Errors()
+		if len(targetErrs) != len(agg) {
+			return false
+		}
+
+		// 确保每个错误都存在于两个聚合中
+		// 注意：这是一个O(n²)操作，对于大量错误可能需要优化
+		matches := 0
+		for _, err1 := range agg {
+			for _, err2 := range targetErrs {
+				if errors.Is(err1, err2) {
+					matches++
+					break
+				}
+			}
+		}
+		return matches == len(agg)
+	}
+
+	// 如果目标是单个错误，检查它是否存在于聚合中
+	for _, err := range agg {
 		if errors.Is(err, target) {
 			return true
 		}
 	}
 	return false
-}
-
-// Errors 是Aggregate接口的一部分。
-func (aggr aggregate) Errors() []error {
-	return []error(aggr)
 }
 
 // Flatten 接受一个可能以任意嵌套方式包含其他Aggregate的Aggregate，

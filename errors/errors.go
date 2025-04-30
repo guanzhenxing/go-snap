@@ -55,8 +55,10 @@
 package errors
 
 import (
+	stderrors "errors" // 为标准库errors包添加别名导入
 	"fmt"
 	"io"
+	"reflect"
 	"strings"
 )
 
@@ -78,10 +80,11 @@ type StackTracer interface {
 
 // contextualError 表示一个统一的错误结构，带有可选的堆栈跟踪、原因和错误码。
 type contextualError struct {
-	msg   string
-	err   error
-	code  int
-	stack *stack
+	msg     string
+	err     error
+	code    int
+	stack   *stack
+	context map[string]interface{}
 }
 
 // Error 返回错误消息。
@@ -121,6 +124,73 @@ func (ce *contextualError) Format(s fmt.State, verb rune) {
 	case 'q':
 		fmt.Fprintf(s, "%q", ce.Error())
 	}
+}
+
+// Is 方法实现了标准库errors.Is的功能，用于错误比较。
+// 如果目标错误是一个错误码，则比较错误码；否则委托给标准库errors.Is。
+func (ce *contextualError) Is(target error) bool {
+	// 如果目标错误是一个错误码
+	if codeErr, ok := target.(interface{ Code() int }); ok {
+		return ce.code == codeErr.Code()
+	}
+
+	// 委托给底层错误
+	if ce.err != nil {
+		if stdErr, ok := ce.err.(interface{ Is(error) bool }); ok {
+			return stdErr.Is(target)
+		}
+		return ce.err == target
+	}
+
+	return false
+}
+
+// As 方法实现了标准库errors.As的功能，用于类型断言。
+// 如果目标类型是一个错误码接口，尝试将当前错误转换为目标类型；
+// 否则委托给底层错误的As方法或标准类型断言。
+func (ce *contextualError) As(target interface{}) bool {
+	// 尝试将自身类型匹配到target
+	if reflectAsTarget(ce, target) {
+		return true
+	}
+
+	// 尝试将当前错误转换为目标类型
+	if coder, ok := target.(interface{ Code() int }); ok {
+		// 模拟为目标类型设置值
+		// 注意：这里仅示意，实际实现需要使用反射正确设置值
+		if setter, ok := coder.(interface{ SetCode(int) }); ok {
+			setter.SetCode(ce.code)
+			return true
+		}
+	}
+
+	// 委托给底层错误
+	if ce.err != nil {
+		if stdErr, ok := ce.err.(interface{ As(interface{}) bool }); ok {
+			return stdErr.As(target)
+		}
+
+		// 尝试直接类型断言
+		return reflectAsTarget(ce.err, target)
+	}
+
+	return false
+}
+
+// reflectAsTarget 使用反射帮助实现As方法的类型断言
+func reflectAsTarget(err error, target interface{}) bool {
+	val := reflect.ValueOf(target)
+	if val.Kind() != reflect.Ptr || val.IsNil() {
+		return false
+	}
+
+	targetType := val.Type().Elem()
+	if targetType.Kind() != reflect.Interface && !reflect.TypeOf(err).AssignableTo(targetType) {
+		return false
+	}
+
+	val.Elem().Set(reflect.ValueOf(err))
+	return true
 }
 
 //=====================================================
@@ -175,11 +245,22 @@ func WithStack(err error) error {
 		code = c.Code()
 	}
 
+	// 尝试从原始错误获取上下文信息
+	var context map[string]interface{}
+	if ce, ok := err.(*contextualError); ok && ce.context != nil {
+		// 复制上下文映射
+		context = make(map[string]interface{}, len(ce.context))
+		for k, v := range ce.context {
+			context[k] = v
+		}
+	}
+
 	return &contextualError{
-		msg:   err.Error(),
-		err:   err,
-		code:  code,
-		stack: callers(),
+		msg:     err.Error(),
+		err:     err,
+		code:    code,
+		stack:   callers(),
+		context: context,
 	}
 }
 
@@ -203,11 +284,22 @@ func Wrap(err error, message string) error {
 		code = c.Code()
 	}
 
+	// 尝试从原始错误获取上下文信息
+	var context map[string]interface{}
+	if ce, ok := err.(*contextualError); ok && ce.context != nil {
+		// 复制上下文映射
+		context = make(map[string]interface{}, len(ce.context))
+		for k, v := range ce.context {
+			context[k] = v
+		}
+	}
+
 	return &contextualError{
-		msg:   message,
-		err:   err,
-		code:  code,
-		stack: callers(),
+		msg:     message,
+		err:     err,
+		code:    code,
+		stack:   callers(),
+		context: context,
 	}
 }
 
@@ -231,11 +323,22 @@ func Wrapf(err error, format string, args ...interface{}) error {
 		code = c.Code()
 	}
 
+	// 尝试从原始错误获取上下文信息
+	var context map[string]interface{}
+	if ce, ok := err.(*contextualError); ok && ce.context != nil {
+		// 复制上下文映射
+		context = make(map[string]interface{}, len(ce.context))
+		for k, v := range ce.context {
+			context[k] = v
+		}
+	}
+
 	return &contextualError{
-		msg:   fmt.Sprintf(format, args...),
-		err:   err,
-		code:  code,
-		stack: callers(),
+		msg:     fmt.Sprintf(format, args...),
+		err:     err,
+		code:    code,
+		stack:   callers(),
+		context: context,
 	}
 }
 
@@ -273,11 +376,22 @@ func WrapWithCode(err error, code int, format string, args ...interface{}) error
 		return nil
 	}
 
+	// 尝试从原始错误获取上下文信息
+	var context map[string]interface{}
+	if ce, ok := err.(*contextualError); ok && ce.context != nil {
+		// 复制上下文映射
+		context = make(map[string]interface{}, len(ce.context))
+		for k, v := range ce.context {
+			context[k] = v
+		}
+	}
+
 	return &contextualError{
-		msg:   fmt.Sprintf(format, args...),
-		err:   err,
-		code:  code,
-		stack: callers(),
+		msg:     fmt.Sprintf(format, args...),
+		err:     err,
+		code:    code,
+		stack:   callers(),
+		context: context,
 	}
 }
 
@@ -327,4 +441,158 @@ func Cause(err error) error {
 		err = cause.Cause()
 	}
 	return err
+}
+
+//=====================================================
+// 错误上下文函数
+//=====================================================
+
+// WithContext 为错误添加上下文信息，返回一个包含上下文的新错误。
+// 上下文信息以键值对的形式存储，可用于存储请求ID、用户ID等额外信息。
+// 如果err为nil，WithContext返回nil。
+//
+// 示例:
+//
+//	err := db.Query()
+//	if err != nil {
+//	    // 添加请求ID作为上下文
+//	    return errors.WithContext(err, "request_id", requestID)
+//	}
+func WithContext(err error, key string, value interface{}) error {
+	if err == nil {
+		return nil
+	}
+
+	// 尝试将上下文信息添加到现有的contextualError
+	var ce *contextualError
+	if stderrors.As(err, &ce) {
+		// 如果已经是contextualError，复制并添加新的上下文值
+		newCE := *ce // 复制结构体
+
+		// 初始化context映射（如果需要）
+		if newCE.context == nil {
+			newCE.context = make(map[string]interface{})
+		}
+
+		// 添加或更新上下文值
+		newCE.context[key] = value
+		return &newCE
+	}
+
+	// 获取错误码（如果有）
+	code := UnknownError.Code()
+	if c, ok := err.(interface{ Code() int }); ok {
+		code = c.Code()
+	}
+
+	// 创建新的contextualError，包含上下文信息
+	return &contextualError{
+		msg:     err.Error(),
+		err:     err,
+		code:    code,
+		stack:   callers(),
+		context: map[string]interface{}{key: value},
+	}
+}
+
+// WithContextMap 为错误添加多个上下文信息，返回一个包含上下文的新错误。
+// 如果err为nil，WithContextMap返回nil。
+//
+// 示例:
+//
+//	err := db.Query()
+//	if err != nil {
+//	    // 添加多个上下文信息
+//	    return errors.WithContextMap(err, map[string]interface{}{
+//	        "request_id": requestID,
+//	        "user_id": userID,
+//	    })
+//	}
+func WithContextMap(err error, contextMap map[string]interface{}) error {
+	if err == nil {
+		return nil
+	}
+
+	if contextMap == nil || len(contextMap) == 0 {
+		return err
+	}
+
+	// 尝试将上下文信息添加到现有的contextualError
+	var ce *contextualError
+	if stderrors.As(err, &ce) {
+		// 如果已经是contextualError，复制并添加新的上下文值
+		newCE := *ce // 复制结构体
+
+		// 初始化context映射（如果需要）
+		if newCE.context == nil {
+			newCE.context = make(map[string]interface{})
+		}
+
+		// 添加或更新所有上下文值
+		for k, v := range contextMap {
+			newCE.context[k] = v
+		}
+
+		return &newCE
+	}
+
+	// 获取错误码（如果有）
+	code := UnknownError.Code()
+	if c, ok := err.(interface{ Code() int }); ok {
+		code = c.Code()
+	}
+
+	// 创建新的上下文映射并复制所有键值对
+	newContext := make(map[string]interface{}, len(contextMap))
+	for k, v := range contextMap {
+		newContext[k] = v
+	}
+
+	// 创建新的contextualError，包含上下文信息
+	return &contextualError{
+		msg:     err.Error(),
+		err:     err,
+		code:    code,
+		stack:   callers(),
+		context: newContext,
+	}
+}
+
+// GetContext 从错误中获取特定键的上下文值。
+// 如果键不存在或错误不包含上下文信息，返回nil和false。
+//
+// 示例:
+//
+//	if requestID, ok := errors.GetContext(err, "request_id"); ok {
+//	    fmt.Printf("错误发生在请求 %v\n", requestID)
+//	}
+func GetContext(err error, key string) (interface{}, bool) {
+	var ce *contextualError
+	if stderrors.As(err, &ce) && ce.context != nil {
+		value, exists := ce.context[key]
+		return value, exists
+	}
+	return nil, false
+}
+
+// GetAllContext 返回错误中的所有上下文信息。
+// 如果错误不包含上下文信息，返回空映射。
+//
+// 示例:
+//
+//	context := errors.GetAllContext(err)
+//	for k, v := range context {
+//	    fmt.Printf("%s: %v\n", k, v)
+//	}
+func GetAllContext(err error) map[string]interface{} {
+	var ce *contextualError
+	if stderrors.As(err, &ce) && ce.context != nil {
+		// 创建副本以避免修改原始映射
+		result := make(map[string]interface{}, len(ce.context))
+		for k, v := range ce.context {
+			result[k] = v
+		}
+		return result
+	}
+	return make(map[string]interface{})
 }

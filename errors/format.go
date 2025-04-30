@@ -3,15 +3,17 @@ package errors
 
 import (
 	"fmt"
+	"sort"
 	"strings"
 )
 
 // errorFormatInfo 包含用于格式化的基本错误信息。
 type errorFormatInfo struct {
-	code    int    // 错误码
-	message string // 格式化消息
-	err     string // 原始错误消息
-	stack   *stack // 堆栈跟踪（如果有）
+	code    int                    // 错误码
+	message string                 // 格式化消息
+	err     string                 // 原始错误消息
+	stack   *stack                 // 堆栈跟踪（如果有）
+	context map[string]interface{} // 上下文信息
 }
 
 // formatDetailed 使用附加详细信息（包括堆栈跟踪）格式化错误。
@@ -46,6 +48,27 @@ func formatDetailed(err error, str *strings.Builder, showTrace bool) {
 			fmt.Fprintf(str, "%s (%d)", info.err, info.code)
 		}
 
+		// 添加上下文信息（如果有）
+		if len(info.context) > 0 {
+			str.WriteString(" {")
+
+			// 获取排序后的键，使输出顺序一致
+			keys := make([]string, 0, len(info.context))
+			for k := range info.context {
+				keys = append(keys, k)
+			}
+			sort.Strings(keys)
+
+			for j, k := range keys {
+				if j > 0 {
+					str.WriteString(", ")
+				}
+				fmt.Fprintf(str, "%s: %v", k, info.context[k])
+			}
+
+			str.WriteString("}")
+		}
+
 		// 除非我们想要跟踪，否则在第一个错误后停止
 		if !showTrace {
 			break
@@ -78,9 +101,11 @@ func extractErrorFormatInfo(err error) *errorFormatInfo {
 	switch e := err.(type) {
 	case *contextualError:
 		code := e.code
-		coder, ok := errorCodeRegistry[code]
-		if !ok {
-			coder = UnknownError
+		var coder ErrorCode = UnknownError
+
+		// 使用sync.Map的Load方法而不是map索引
+		if coderVal, ok := errorCodeRegistry.Load(code); ok {
+			coder = coderVal.(ErrorCode)
 		}
 
 		extMsg := coder.String()
@@ -93,6 +118,7 @@ func extractErrorFormatInfo(err error) *errorFormatInfo {
 			message: extMsg,
 			err:     e.msg,
 			stack:   e.stack,
+			context: e.context, // 添加上下文信息
 		}
 	default:
 		info = &errorFormatInfo{
