@@ -3,6 +3,7 @@ package errors
 import (
 	stderrors "errors"
 	"fmt"
+	"net/http"
 	"strings"
 	"testing"
 )
@@ -865,4 +866,408 @@ func mockBusinessLogic(requestID string, userID int) error {
 
 	// 包装原始错误
 	return Wrap(err, "获取用户数据失败")
+}
+
+// 定义一个实现Code和SetCode接口的错误类型
+type testCodedError struct {
+	code int
+	msg  string
+}
+
+func (e *testCodedError) Error() string {
+	return e.msg
+}
+
+func (e *testCodedError) Code() int {
+	return e.code
+}
+
+func (e *testCodedError) SetCode(code int) {
+	e.code = code
+}
+
+// 定义一个实现多层嵌套错误的类型
+type testNestedError struct {
+	err error
+}
+
+func (e *testNestedError) Error() string {
+	if e.err != nil {
+		return "嵌套: " + e.err.Error()
+	}
+	return "嵌套错误"
+}
+
+func (e *testNestedError) Unwrap() error {
+	return e.err
+}
+
+// 定义一个同时实现多个接口的错误类型
+type testMultiInterfaceError struct {
+	code    int
+	msg     string
+	context map[string]interface{}
+}
+
+func (e *testMultiInterfaceError) Error() string {
+	return e.msg
+}
+
+func (e *testMultiInterfaceError) Code() int {
+	return e.code
+}
+
+func (e *testMultiInterfaceError) SetCode(code int) {
+	e.code = code
+}
+
+func (e *testMultiInterfaceError) Context() map[string]interface{} {
+	return e.context
+}
+
+// 测试As方法增强版
+func TestAsEnhanced(t *testing.T) {
+	// 1. 测试contextualError实现的As方法
+	baseErr := &testCustomError{msg: "基础错误"}
+	contextErr := &contextualError{
+		msg:   "上下文错误",
+		err:   baseErr,
+		code:  404,
+		stack: callers(),
+		context: map[string]interface{}{
+			"key": "value",
+		},
+	}
+
+	// 1.1 测试直接匹配contextualError类型
+	var ce *contextualError
+	if !stderrors.As(contextErr, &ce) {
+		t.Error("应该能够将contextualError匹配为它自己的类型")
+	} else if ce.code != 404 {
+		t.Errorf("匹配的contextualError的错误码错误: %d", ce.code)
+	}
+
+	// 1.2 测试匹配其内部嵌套的错误
+	var customErr *testCustomError
+	if !stderrors.As(contextErr, &customErr) {
+		t.Error("应该能从contextualError中提取内部嵌套的testCustomError")
+	} else if customErr.msg != "基础错误" {
+		t.Errorf("内部嵌套错误的消息错误: %s", customErr.msg)
+	}
+
+	// 2. 测试匹配Code接口
+	codedErr := &testCodedError{code: 999, msg: "编码错误"}
+	wrappedCodedErr := Wrap(codedErr, "包装的编码错误")
+
+	// 创建一个可以接收Code接口的目标
+	type codeGetter interface {
+		Code() int
+	}
+	var cg codeGetter
+	if !stderrors.As(wrappedCodedErr, &cg) {
+		t.Error("应该能够将wrappedCodedErr匹配为Code接口")
+	} else if cg.Code() != 999 {
+		t.Errorf("通过接口获取的错误码错误: %d", cg.Code())
+	}
+
+	// 3. 测试多层嵌套错误
+	innerErr := &testCustomError{msg: "内层错误"}
+	middleErr := &testNestedError{err: innerErr}
+	outerErr := &testNestedError{err: middleErr}
+	wrappedNestedErr := Wrap(outerErr, "包装的多层嵌套错误")
+
+	var inner *testCustomError
+	if !stderrors.As(wrappedNestedErr, &inner) {
+		t.Error("应该能从多层嵌套错误中提取最内层错误")
+	} else if inner.msg != "内层错误" {
+		t.Errorf("内层错误消息错误: %s", inner.msg)
+	}
+
+	// 4. 测试实现多接口的错误
+	multiErr := &testMultiInterfaceError{
+		code: 501,
+		msg:  "多接口错误",
+		context: map[string]interface{}{
+			"multi": true,
+		},
+	}
+	wrappedMultiErr := Wrap(multiErr, "包装的多接口错误")
+
+	// 4.1 测试匹配为Code接口
+	if !stderrors.As(wrappedMultiErr, &cg) {
+		t.Error("应该能够将包装的多接口错误匹配为Code接口")
+	} else if cg.Code() != 501 {
+		t.Errorf("通过接口获取的多接口错误码错误: %d", cg.Code())
+	}
+
+	// 4.2 测试匹配为完整的多接口错误类型
+	var multi *testMultiInterfaceError
+	if !stderrors.As(wrappedMultiErr, &multi) {
+		t.Error("应该能够将包装的多接口错误匹配为原始类型")
+	} else {
+		if multi.code != 501 {
+			t.Errorf("多接口错误码错误: %d", multi.code)
+		}
+		if !multi.context["multi"].(bool) {
+			t.Error("多接口错误上下文错误")
+		}
+	}
+
+	// 5. 测试直接类型断言失败的情况
+	strErr := fmt.Errorf("字符串错误")
+	var numErr *testCustomCodeError
+	if stderrors.As(strErr, &numErr) {
+		t.Error("不应该能够将字符串错误匹配为testCustomCodeError")
+	}
+
+	// 6. 测试nil错误和nil目标
+	if stderrors.As(nil, &customErr) {
+		t.Error("nil错误不应该匹配任何目标")
+	}
+
+	// 7. 测试非指针目标
+	// 注意：这里通过反射模拟，因为直接传非指针会导致编译错误
+	invalidTarget := "非指针目标"
+	result := contextErr.As(invalidTarget) // 直接调用As方法而不是通过stderrors.As
+	if result {
+		t.Error("非指针目标应该返回匹配失败")
+	}
+}
+
+// 测试As方法的额外场景
+func TestAsMethodAdditionalScenarios(t *testing.T) {
+	// 测试直接匹配nil错误
+	var customErr *testCustomError
+	if stderrors.As(nil, &customErr) {
+		t.Error("对nil错误调用As不应匹配任何类型")
+	}
+
+	// 错误链中有nil的情况
+	nilWrappedErr := &contextualError{
+		msg: "包装nil",
+		err: nil,
+	}
+	if stderrors.As(nilWrappedErr, &customErr) {
+		t.Error("包含nil原因的错误不应匹配非自身类型")
+	}
+
+	// 目标值为nil
+	baseErr := &testCustomError{msg: "基础错误"}
+	wrappedErr := Wrap(baseErr, "包装错误")
+
+	var nilTarget *testCustomError = nil
+	if !stderrors.As(wrappedErr, &nilTarget) {
+		t.Error("目标值为nil时，As应该能够正确设置目标")
+	}
+	if nilTarget == nil || nilTarget.msg != "基础错误" {
+		t.Errorf("As应该正确设置目标值，got: %v", nilTarget)
+	}
+
+	// 嵌套多层的复杂情况
+	customCodeErr := &testCustomCodeError{code: 123, msg: "编码错误"}
+	nestedErr := Wrap(customCodeErr, "一级嵌套")
+	doubleNestedErr := Wrap(nestedErr, "二级嵌套")
+	tripleNestedErr := Wrap(doubleNestedErr, "三级嵌套")
+
+	var extractedCodeErr *testCustomCodeError
+	if !stderrors.As(tripleNestedErr, &extractedCodeErr) {
+		t.Error("As应该能穿透多层嵌套查找特定类型")
+	} else if extractedCodeErr.code != 123 {
+		t.Errorf("提取的错误码错误: %d", extractedCodeErr.code)
+	}
+}
+
+// 测试Errorf函数的边缘情况
+func TestErrorfEdgeCases(t *testing.T) {
+	// 测试空格式字符串
+	err1 := Errorf("")
+	if err1.Error() != "" {
+		t.Errorf("空格式字符串应该产生空错误消息，得到: %q", err1.Error())
+	}
+
+	// 测试格式字符串中包含%字符但没有参数
+	err2 := Errorf("格式字符串包含%%字符但没有参数")
+	if !strings.Contains(err2.Error(), "格式字符串包含%字符但没有参数") {
+		t.Errorf("含有%%的格式字符串没有正确处理: %q", err2.Error())
+	}
+
+	// 测试格式字符串中有多个参数
+	err3 := Errorf("多个参数: %d, %s, %t", 123, "字符串", true)
+	expected := "多个参数: 123, 字符串, true"
+	if err3.Error() != expected {
+		t.Errorf("多参数格式错误: 期望 %q, 得到 %q", expected, err3.Error())
+	}
+
+	// 测试在堆栈捕获模式为Never时的行为
+	originalMode := DefaultStackCaptureMode
+	DefaultStackCaptureMode = StackCaptureModeNever
+	defer func() {
+		DefaultStackCaptureMode = originalMode
+	}()
+
+	err4 := Errorf("无堆栈错误")
+	if st, ok := err4.(StackTracer); ok && st.StackTrace() != nil {
+		t.Error("StackCaptureModeNever模式下Errorf不应产生堆栈")
+	}
+}
+
+// 测试WithStack的更多场景
+func TestWithStackMoreScenarios(t *testing.T) {
+	// 测试为已有堆栈的错误添加堆栈
+	baseErr := New("带堆栈的错误")
+	doubleStackErr := WithStack(baseErr)
+
+	// 检查是否仍然保留了原始错误消息
+	if doubleStackErr.Error() != baseErr.Error() {
+		t.Errorf("添加堆栈后消息变化: 期望 %q, 得到 %q",
+			baseErr.Error(), doubleStackErr.Error())
+	}
+
+	// 测试堆栈有效性
+	st, ok := doubleStackErr.(StackTracer)
+	if !ok || st.StackTrace() == nil {
+		t.Error("WithStack后应该有堆栈")
+	}
+
+	// 测试不同堆栈捕获模式
+	originalMode := DefaultStackCaptureMode
+	defer func() {
+		DefaultStackCaptureMode = originalMode
+	}()
+
+	// 测试延迟捕获模式
+	DefaultStackCaptureMode = StackCaptureModeDeferred
+	deferredErr := WithStack(fmt.Errorf("基础错误"))
+	if _, ok := deferredErr.(StackTracer); !ok {
+		t.Error("延迟模式应该返回可提供堆栈的错误")
+	}
+
+	// 测试立即捕获模式
+	DefaultStackCaptureMode = StackCaptureModeImmediate
+	immediateErr := WithStack(fmt.Errorf("基础错误"))
+	if _, ok := immediateErr.(StackTracer); !ok {
+		t.Error("立即模式应该返回可提供堆栈的错误")
+	}
+
+	// 测试采样模式
+	DefaultStackCaptureMode = StackCaptureModeModeSampled
+	_ = WithStack(fmt.Errorf("基础错误"))
+	// 这里不做断言因为采样模式的行为是不确定的
+}
+
+// 测试Wrapf函数的更多场景
+func TestWrapfMoreScenarios(t *testing.T) {
+	baseErr := fmt.Errorf("基础错误")
+
+	// 测试基本用法补充
+	err1 := Wrapf(baseErr, "简单包装 %s", "消息")
+	if err1.Error() != "简单包装 消息" {
+		t.Errorf("错误消息格式化错误: %q", err1.Error())
+	}
+
+	// 测试多个格式参数
+	err2 := Wrapf(baseErr, "包装于 %s，代码: %d，状态: %t", "测试函数", 404, true)
+	expected := "包装于 测试函数，代码: 404，状态: true"
+	if err2.Error() != expected {
+		t.Errorf("多参数格式错误: 期望 %q, 得到 %q", expected, err2.Error())
+	}
+
+	// 测试获取错误原因
+	cause := Cause(err1)
+	if cause != baseErr {
+		t.Errorf("Wrapf(baseErr, ...)的Cause应为baseErr，得到: %v", cause)
+	}
+
+	// 错误为nil时应返回nil
+	if Wrapf(nil, "这不应生成错误") != nil {
+		t.Error("Wrapf(nil, msg)应该返回nil")
+	}
+}
+
+// 测试WrapWithCode的更多场景
+func TestWrapWithCodeMoreScenarios(t *testing.T) {
+	baseErr := fmt.Errorf("基础错误")
+	const code = 503
+
+	// 注册错误码
+	RegisterErrorCode(code, http.StatusServiceUnavailable, "服务不可用", "")
+
+	// 测试基本用法补充
+	err1 := WrapWithCode(baseErr, code, "简单包装错误")
+
+	// 检查错误码
+	codeErr, ok := err1.(interface{ Code() int })
+	if !ok || codeErr.Code() != code {
+		t.Errorf("错误码设置错误: 期望 %d, 得到 %v", code, codeErr)
+	}
+
+	// 测试格式化包装
+	err2 := WrapWithCode(baseErr, code, "格式化包装错误: %d", 42)
+	expected := "格式化包装错误: 42"
+	if err2.Error() != expected {
+		t.Errorf("格式化包装错误: 期望 %q, 得到 %q", expected, err2.Error())
+	}
+
+	// 测试错误原因传递
+	cause := Cause(err1)
+	if cause != baseErr {
+		t.Errorf("WrapWithCode应保留原始错误: 期望 %v, 得到 %v", baseErr, cause)
+	}
+
+	// 测试错误码属性保留
+	codedErr := GetErrorCodeFromError(err2)
+	if codedErr == nil || codedErr.Code() != code {
+		t.Errorf("WrapWithCode错误码属性错误: 期望 %d, 得到 %v", code, codedErr)
+	}
+
+	// nil错误处理
+	if WrapWithCode(nil, code, "包装nil") != nil {
+		t.Error("WrapWithCode(nil, code, msg)应该返回nil")
+	}
+}
+
+// 测试NewWithStackControl的更多场景
+func TestNewWithStackControlMoreScenarios(t *testing.T) {
+	// 测试所有堆栈捕获模式
+	modes := []struct {
+		mode            StackCaptureMode
+		shouldHaveStack bool
+		name            string
+	}{
+		{StackCaptureModeNever, false, "Never"},
+		{StackCaptureModeImmediate, true, "Immediate"},
+		{StackCaptureModeDeferred, true, "Deferred"},
+		// 注意：采样模式不做确定性断言
+	}
+
+	for _, tc := range modes {
+		t.Run(tc.name, func(t *testing.T) {
+			err := NewWithStackControl("测试错误", tc.mode)
+
+			// 检查错误消息
+			if err.Error() != "测试错误" {
+				t.Errorf("错误消息错误: 期望 %q, 得到 %q", "测试错误", err.Error())
+			}
+
+			// 检查堆栈跟踪
+			hasStack := false
+			if st, ok := err.(StackTracer); ok && st.StackTrace() != nil {
+				hasStack = true
+			}
+
+			if hasStack != tc.shouldHaveStack {
+				t.Errorf("模式 %v: 堆栈存在 %v, 期望 %v", tc.mode, hasStack, tc.shouldHaveStack)
+			}
+		})
+	}
+
+	// 测试特殊情况：采样模式下的行为
+	// 注意：这只是测试函数调用而不断言结果
+	_ = NewWithStackControl("采样测试", StackCaptureModeModeSampled)
+
+	// 测试空消息
+	emptyErr := NewWithStackControl("", StackCaptureModeImmediate)
+	if emptyErr.Error() != "" {
+		t.Error("空消息应保持为空")
+	}
 }

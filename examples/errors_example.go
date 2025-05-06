@@ -6,6 +6,7 @@ import (
 	"log"
 	"net/http"
 	"reflect"
+	"time"
 
 	"github.com/guanzhenxing/go-snap/errors"
 )
@@ -19,11 +20,28 @@ const (
 	// 数据库相关错误 (2000-2999)
 	ErrDatabaseConnection = 2001
 	ErrDuplicateKey       = 2002
+	ErrQueryTimeout       = 2003
+	ErrTransactionFailed  = 2004
 
 	// API相关错误 (3000-3999)
 	ErrInvalidInput      = 3001
 	ErrUnauthorized      = 3002
 	ErrRateLimitExceeded = 3003
+	ErrResourceNotFound  = 3004
+	ErrMethodNotAllowed  = 3005
+
+	// 业务逻辑错误 (4000-4999)
+	ErrInsufficientFunds  = 4001
+	ErrPaymentFailed      = 4002
+	ErrOrderProcessing    = 4003
+	ErrInvalidOrderStatus = 4004
+	ErrProductUnavailable = 4005
+
+	// 第三方服务错误 (5000-5999)
+	ErrThirdPartyTimeout  = 5001
+	ErrThirdPartyError    = 5002
+	ErrGatewayTimeout     = 5003
+	ErrServiceUnavailable = 5004
 )
 
 // 初始化并注册所有错误码
@@ -35,11 +53,28 @@ func init() {
 	// 注册数据库相关错误码
 	errors.RegisterErrorCode(ErrDatabaseConnection, http.StatusInternalServerError, "数据库连接失败", "https://docs.example.com/errors/db-connection")
 	errors.RegisterErrorCode(ErrDuplicateKey, http.StatusConflict, "记录已存在", "https://docs.example.com/errors/duplicate-key")
+	errors.RegisterErrorCode(ErrQueryTimeout, http.StatusGatewayTimeout, "数据库查询超时", "https://docs.example.com/errors/query-timeout")
+	errors.RegisterErrorCode(ErrTransactionFailed, http.StatusInternalServerError, "事务执行失败", "https://docs.example.com/errors/transaction-failed")
 
 	// 注册API相关错误码
 	errors.RegisterErrorCode(ErrInvalidInput, http.StatusBadRequest, "输入无效", "")
 	errors.RegisterErrorCode(ErrUnauthorized, http.StatusUnauthorized, "未授权访问", "")
 	errors.RegisterErrorCode(ErrRateLimitExceeded, http.StatusTooManyRequests, "请求速率超限", "")
+	errors.RegisterErrorCode(ErrResourceNotFound, http.StatusNotFound, "资源未找到", "")
+	errors.RegisterErrorCode(ErrMethodNotAllowed, http.StatusMethodNotAllowed, "方法不允许", "")
+
+	// 注册业务逻辑错误码
+	errors.RegisterErrorCode(ErrInsufficientFunds, http.StatusBadRequest, "余额不足", "")
+	errors.RegisterErrorCode(ErrPaymentFailed, http.StatusBadRequest, "支付失败", "")
+	errors.RegisterErrorCode(ErrOrderProcessing, http.StatusBadRequest, "订单处理中", "")
+	errors.RegisterErrorCode(ErrInvalidOrderStatus, http.StatusBadRequest, "订单状态无效", "")
+	errors.RegisterErrorCode(ErrProductUnavailable, http.StatusBadRequest, "商品不可用", "")
+
+	// 注册第三方服务错误码
+	errors.RegisterErrorCode(ErrThirdPartyTimeout, http.StatusGatewayTimeout, "第三方服务超时", "")
+	errors.RegisterErrorCode(ErrThirdPartyError, http.StatusBadGateway, "第三方服务错误", "")
+	errors.RegisterErrorCode(ErrGatewayTimeout, http.StatusGatewayTimeout, "网关超时", "")
+	errors.RegisterErrorCode(ErrServiceUnavailable, http.StatusServiceUnavailable, "服务不可用", "")
 }
 
 // 模拟用户服务
@@ -111,6 +146,261 @@ func HandleUserRequest(userID int, requestID string) error {
 	}
 
 	fmt.Printf("成功处理用户 %s 的请求\n", username)
+	return nil
+}
+
+// ===========================================================================
+// 新增实际应用场景示例
+// ===========================================================================
+
+// 场景1: 分布式系统中的微服务调用
+type ServiceClient struct {
+	name     string
+	endpoint string
+}
+
+func NewServiceClient(name, endpoint string) *ServiceClient {
+	return &ServiceClient{
+		name:     name,
+		endpoint: endpoint,
+	}
+}
+
+// 模拟调用远程服务
+func (c *ServiceClient) Call(method string, params map[string]interface{}) (interface{}, error) {
+	// 模拟请求ID和追踪ID
+	requestID := "req-" + time.Now().Format("20060102150405")
+	traceID := "trace-abc-" + requestID
+
+	// 添加调用上下文
+	callContext := map[string]interface{}{
+		"request_id":      requestID,
+		"trace_id":        traceID,
+		"source_service":  "api_gateway",
+		"target_service":  c.name,
+		"target_endpoint": c.endpoint,
+		"method":          method,
+		"timestamp":       time.Now().Format(time.RFC3339),
+	}
+
+	// 模拟超时错误
+	if method == "getUserProfile" && params["simulate"] == "timeout" {
+		baseErr := errors.NewWithCode(ErrThirdPartyTimeout, "调用%s服务超时", c.name)
+		return nil, errors.WithContextMap(baseErr, callContext)
+	}
+
+	// 模拟服务错误
+	if method == "getUserProfile" && params["simulate"] == "error" {
+		// 模拟底层错误
+		innerErr := stderrors.New("500 Internal Server Error")
+		// 添加一层包装
+		serviceErr := errors.Wrap(innerErr, "远程服务返回错误状态码")
+		// 添加错误码
+		codedErr := errors.WrapWithCode(serviceErr, ErrThirdPartyError, "调用%s服务失败", c.name)
+		// 添加上下文
+		return nil, errors.WithContextMap(codedErr, callContext)
+	}
+
+	// 模拟服务不可用
+	if method == "getUserProfile" && params["simulate"] == "unavailable" {
+		baseErr := errors.NewWithCode(ErrServiceUnavailable, "%s服务不可用", c.name)
+		return nil, errors.WithContextMap(baseErr, callContext)
+	}
+
+	// 正常返回
+	return map[string]interface{}{
+		"success": true,
+		"data": map[string]interface{}{
+			"user_id":   params["user_id"],
+			"timestamp": time.Now().Format(time.RFC3339),
+		},
+	}, nil
+}
+
+// 场景2: 数据库操作封装
+type DatabaseClient struct {
+	connString string
+}
+
+func NewDatabaseClient(connString string) *DatabaseClient {
+	return &DatabaseClient{
+		connString: connString,
+	}
+}
+
+// 模拟数据库查询
+func (db *DatabaseClient) Query(query string, params map[string]interface{}) (interface{}, error) {
+	// 添加查询上下文
+	queryContext := map[string]interface{}{
+		"query":     query,
+		"params":    params,
+		"timestamp": time.Now().Format(time.RFC3339),
+		"db_host":   "db-server-01",
+	}
+
+	// 模拟连接错误
+	if params["simulate"] == "connection_error" {
+		baseErr := stderrors.New("无法连接到数据库服务器")
+		return nil, errors.WithContextMap(
+			errors.WrapWithCode(baseErr, ErrDatabaseConnection, "数据库连接失败"),
+			queryContext,
+		)
+	}
+
+	// 模拟查询超时
+	if params["simulate"] == "timeout" {
+		baseErr := stderrors.New("查询执行超过30秒限制")
+		return nil, errors.WithContextMap(
+			errors.WrapWithCode(baseErr, ErrQueryTimeout, "数据库查询超时"),
+			queryContext,
+		)
+	}
+
+	// 模拟事务错误
+	if params["simulate"] == "transaction_error" {
+		// 可能的底层错误链
+		sqlErr := stderrors.New("foreign key constraint failed")
+		txErr := errors.Wrap(sqlErr, "无法更新关联表")
+		return nil, errors.WithContextMap(
+			errors.WrapWithCode(txErr, ErrTransactionFailed, "事务执行失败"),
+			queryContext,
+		)
+	}
+
+	// 正常返回
+	return map[string]interface{}{
+		"rows_affected":  1,
+		"last_insert_id": 1001,
+	}, nil
+}
+
+// 场景3: Web API处理器
+type APIHandler struct {
+	userService   *UserService
+	dbClient      *DatabaseClient
+	serviceClient *ServiceClient
+}
+
+func NewAPIHandler() *APIHandler {
+	return &APIHandler{
+		userService:   &UserService{},
+		dbClient:      NewDatabaseClient("postgres://user:pass@localhost:5432/mydb"),
+		serviceClient: NewServiceClient("user-profile", "https://user-profile.example.com"),
+	}
+}
+
+// 模拟处理用户订单API请求
+func (h *APIHandler) HandleOrderCreation(orderData map[string]interface{}) (interface{}, error) {
+	// 创建API上下文
+	requestID := fmt.Sprintf("req-%d", time.Now().UnixNano())
+	apiContext := map[string]interface{}{
+		"request_id": requestID,
+		"endpoint":   "/api/orders",
+		"method":     "POST",
+		"client_ip":  "192.168.1.1",
+		"user_agent": "Mozilla/5.0",
+		"timestamp":  time.Now().Format(time.RFC3339),
+	}
+
+	// 1. 验证请求数据
+	if _, ok := orderData["user_id"]; !ok {
+		return nil, errors.WithContextMap(
+			errors.NewWithCode(ErrInvalidInput, "用户ID不能为空"),
+			apiContext,
+		)
+	}
+
+	if _, ok := orderData["product_id"]; !ok {
+		return nil, errors.WithContextMap(
+			errors.NewWithCode(ErrInvalidInput, "商品ID不能为空"),
+			apiContext,
+		)
+	}
+
+	userID := orderData["user_id"].(int)
+	productID := orderData["product_id"].(int)
+
+	// 2. 获取用户信息
+	_, err := h.userService.FindByID(userID)
+	if err != nil {
+		return nil, errors.WithContextMap(
+			errors.Wrap(err, "获取订单用户信息失败"),
+			apiContext,
+		)
+	}
+
+	// 3. 检查商品库存
+	_, err = h.dbClient.Query("SELECT stock FROM products WHERE id = ?", map[string]interface{}{
+		"id":       productID,
+		"simulate": orderData["simulate_db"],
+	})
+	if err != nil {
+		return nil, errors.WithContextMap(
+			errors.Wrap(err, "检查商品库存失败"),
+			apiContext,
+		)
+	}
+
+	// 4. 调用支付服务进行预授权
+	_, err = h.serviceClient.Call("preAuthorizePayment", map[string]interface{}{
+		"user_id":  userID,
+		"amount":   orderData["amount"],
+		"simulate": orderData["simulate_service"],
+	})
+	if err != nil {
+		return nil, errors.WithContextMap(
+			errors.Wrap(err, "支付预授权失败"),
+			apiContext,
+		)
+	}
+
+	// 5. 创建订单记录
+	_, err = h.dbClient.Query(
+		"INSERT INTO orders (user_id, product_id, amount, status) VALUES (?, ?, ?, ?)",
+		map[string]interface{}{
+			"user_id":    userID,
+			"product_id": productID,
+			"amount":     orderData["amount"],
+			"status":     "pending",
+			"simulate":   orderData["simulate_db"],
+		},
+	)
+	if err != nil {
+		// 发生错误，还需要取消支付预授权
+		cancelErr := h.rollbackPayment(userID, orderData["amount"])
+		if cancelErr != nil {
+			// 两个错误都需要报告
+			return nil, errors.WithContextMap(
+				errors.NewAggregate([]error{
+					errors.Wrap(err, "创建订单失败"),
+					errors.Wrap(cancelErr, "取消支付预授权失败"),
+				}),
+				apiContext,
+			)
+		}
+		return nil, errors.WithContextMap(
+			errors.Wrap(err, "创建订单失败"),
+			apiContext,
+		)
+	}
+
+	// 成功响应
+	return map[string]interface{}{
+		"order_id":   12345,
+		"status":     "created",
+		"request_id": requestID,
+	}, nil
+}
+
+// 模拟回滚支付
+func (h *APIHandler) rollbackPayment(userID int, amount interface{}) error {
+	_, err := h.serviceClient.Call("cancelPayment", map[string]interface{}{
+		"user_id": userID,
+		"amount":  amount,
+	})
+	if err != nil {
+		return errors.Wrap(err, "取消支付失败")
+	}
 	return nil
 }
 
@@ -239,6 +529,81 @@ func main() {
 
 	fmt.Println("StackCaptureModeDeferred错误:")
 	HandleError(err8c)
+
+	// ===========================================================================
+	// 运行新增的实际应用场景示例
+	// ===========================================================================
+
+	// 示例9: 分布式系统中的微服务调用
+	fmt.Println("\n[示例9: 分布式系统中的微服务调用]")
+	serviceClient := NewServiceClient("user-profile", "https://user-profile.example.com")
+
+	// 9.1 模拟微服务超时
+	_, err9a := serviceClient.Call("getUserProfile", map[string]interface{}{
+		"user_id":  123,
+		"simulate": "timeout",
+	})
+	fmt.Println("微服务调用超时:")
+	HandleError(err9a)
+
+	// 9.2 模拟微服务错误
+	_, err9b := serviceClient.Call("getUserProfile", map[string]interface{}{
+		"user_id":  123,
+		"simulate": "error",
+	})
+	fmt.Println("微服务调用错误:")
+	HandleError(err9b)
+
+	// 示例10: 数据库操作
+	fmt.Println("\n[示例10: 数据库操作场景]")
+	dbClient := NewDatabaseClient("postgres://user:pass@localhost:5432/mydb")
+
+	// 10.1 模拟数据库连接错误
+	_, err10a := dbClient.Query("SELECT * FROM users", map[string]interface{}{
+		"simulate": "connection_error",
+	})
+	fmt.Println("数据库连接错误:")
+	HandleError(err10a)
+
+	// 10.2 模拟数据库查询超时
+	_, err10b := dbClient.Query("SELECT * FROM large_table", map[string]interface{}{
+		"simulate": "timeout",
+	})
+	fmt.Println("数据库查询超时:")
+	HandleError(err10b)
+
+	// 10.3 模拟事务执行失败
+	_, err10c := dbClient.Query("UPDATE orders SET status = 'completed'", map[string]interface{}{
+		"simulate": "transaction_error",
+	})
+	fmt.Println("事务执行失败:")
+	HandleError(err10c)
+
+	// 示例11: Web API处理复杂订单创建
+	fmt.Println("\n[示例11: Web API处理复杂订单创建]")
+	apiHandler := NewAPIHandler()
+
+	// 11.1 模拟订单创建过程中的数据库错误
+	_, err11a := apiHandler.HandleOrderCreation(map[string]interface{}{
+		"user_id":          123,
+		"product_id":       456,
+		"amount":           99.99,
+		"simulate_db":      "transaction_error",
+		"simulate_service": "normal",
+	})
+	fmt.Println("订单创建 - 数据库错误:")
+	HandleError(err11a)
+
+	// 11.2 模拟订单创建过程中的微服务错误
+	_, err11b := apiHandler.HandleOrderCreation(map[string]interface{}{
+		"user_id":          123,
+		"product_id":       456,
+		"amount":           99.99,
+		"simulate_db":      "normal",
+		"simulate_service": "timeout",
+	})
+	fmt.Println("订单创建 - 微服务错误:")
+	HandleError(err11b)
 
 	log.Println("示例运行完成")
 }
