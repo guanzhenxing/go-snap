@@ -12,7 +12,7 @@ type errorFormatInfo struct {
 	code    int                    // 错误码
 	message string                 // 格式化消息
 	err     string                 // 原始错误消息
-	stack   *stack                 // 堆栈跟踪（如果有）
+	stack   StackProvider          // 堆栈跟踪（如果有）
 	context map[string]interface{} // 上下文信息
 }
 
@@ -35,8 +35,8 @@ func formatDetailed(err error, str *strings.Builder, showTrace bool) {
 		info := extractErrorFormatInfo(err)
 
 		// 添加详细信息
-		if info.stack != nil && len(*info.stack) > 0 {
-			f := Frame((*info.stack)[0])
+		if info.stack != nil && info.stack.StackTrace() != nil && len(info.stack.StackTrace()) > 0 {
+			f := info.stack.StackTrace()[0]
 			fmt.Fprintf(str, "%s - [%s:%d (%s)] (%d)",
 				info.err,
 				f.file(),

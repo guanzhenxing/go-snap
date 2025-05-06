@@ -43,6 +43,13 @@ func TestErrorFormatValue(t *testing.T) {
 
 // 测试错误格式化 %+v
 func TestErrorFormatDetailedValue(t *testing.T) {
+	// 保存原始配置
+	originalMode := DefaultStackCaptureMode
+	DefaultStackCaptureMode = StackCaptureModeImmediate // 确保使用立即模式进行测试
+	defer func() {
+		DefaultStackCaptureMode = originalMode
+	}()
+
 	const errorMessage = "测试错误"
 	err := New(errorMessage)
 
@@ -51,7 +58,8 @@ func TestErrorFormatDetailedValue(t *testing.T) {
 		t.Errorf("使用%%+v格式化错误应该包含错误消息，但得到: %q", formatted)
 	}
 
-	if !strings.Contains(formatted, "stack_test.go") && !strings.Contains(formatted, "format_test.go") {
+	// 检查是否包含调用位置
+	if !strings.Contains(formatted, "/errors/format_test.go:") {
 		t.Errorf("使用%%+v格式化错误应该包含堆栈信息，但得到: %q", formatted)
 	}
 }

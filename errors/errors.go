@@ -52,6 +52,24 @@
 //	if errors.IsErrorCode(err, NotFound) {
 //	    // 处理未找到错误
 //	}
+//
+// # 堆栈捕获优化
+//
+// 本包支持多种堆栈捕获策略，可以根据性能需求进行配置：
+//
+//	// 设置全局堆栈捕获模式
+//	errors.DefaultStackCaptureMode = errors.StackCaptureModeDeferred // 默认模式
+//
+//	// 为特定错误选择捕获模式
+//	err := errors.NewWithStackControl("错误", errors.StackCaptureModeImmediate)
+//
+// 支持以下捕获模式：
+//   - StackCaptureModeNever: 不捕获堆栈，最大化性能
+//   - StackCaptureModeDeferred: 仅在需要时捕获堆栈（默认模式）
+//   - StackCaptureModeImmediate: 创建错误时立即捕获堆栈
+//   - StackCaptureModeModeSampled: 每N个错误采样一个堆栈
+//
+// 更详细的信息请参考 stack_optimization.md 文档。
 package errors
 
 import (
@@ -60,6 +78,7 @@ import (
 	"io"
 	"reflect"
 	"strings"
+	"sync/atomic"
 )
 
 //=====================================================
@@ -78,12 +97,16 @@ type StackTracer interface {
 	StackTrace() StackTrace
 }
 
+//=====================================================
+// 错误结构定义
+//=====================================================
+
 // contextualError 表示一个统一的错误结构，带有可选的堆栈跟踪、原因和错误码。
 type contextualError struct {
 	msg     string
 	err     error
 	code    int
-	stack   *stack
+	stack   StackProvider
 	context map[string]interface{}
 }
 
@@ -204,9 +227,27 @@ func reflectAsTarget(err error, target interface{}) bool {
 //
 //	err := errors.New("连接被拒绝")
 func New(message string) error {
+	var stack StackProvider
+
+	switch DefaultStackCaptureMode {
+	case StackCaptureModeNever:
+		stack = nil
+	case StackCaptureModeImmediate:
+		stack = callers()
+	case StackCaptureModeDeferred:
+		stack = newLazyStack(3)
+	case StackCaptureModeModeSampled:
+		counter := atomic.AddInt32(&stackSampleCounter, 1)
+		if counter%int32(SamplingRate) == 0 {
+			stack = callers()
+		}
+	default:
+		stack = newLazyStack(3)
+	}
+
 	return &contextualError{
 		msg:   message,
-		stack: callers(),
+		stack: stack,
 	}
 }
 
@@ -217,9 +258,27 @@ func New(message string) error {
 //
 //	err := errors.Errorf("连接到%s被拒绝", hostname)
 func Errorf(format string, args ...interface{}) error {
+	var stack StackProvider
+
+	switch DefaultStackCaptureMode {
+	case StackCaptureModeNever:
+		stack = nil
+	case StackCaptureModeImmediate:
+		stack = callers()
+	case StackCaptureModeDeferred:
+		stack = newLazyStack(3)
+	case StackCaptureModeModeSampled:
+		counter := atomic.AddInt32(&stackSampleCounter, 1)
+		if counter%int32(SamplingRate) == 0 {
+			stack = callers()
+		}
+	default:
+		stack = newLazyStack(3)
+	}
+
 	return &contextualError{
 		msg:   fmt.Sprintf(format, args...),
-		stack: callers(),
+		stack: stack,
 	}
 }
 
@@ -248,7 +307,7 @@ func WithStack(err error) error {
 	// 尝试从原始错误获取上下文信息
 	var context map[string]interface{}
 	if ce, ok := err.(*contextualError); ok && ce.context != nil {
-		// 复制上下文映射
+		// 创建上下文的拷贝
 		context = make(map[string]interface{}, len(ce.context))
 		for k, v := range ce.context {
 			context[k] = v
@@ -259,7 +318,7 @@ func WithStack(err error) error {
 		msg:     err.Error(),
 		err:     err,
 		code:    code,
-		stack:   callers(),
+		stack:   createStackProvider(),
 		context: context,
 	}
 }
@@ -513,7 +572,7 @@ func WithContextMap(err error, contextMap map[string]interface{}) error {
 		return nil
 	}
 
-	if contextMap == nil || len(contextMap) == 0 {
+	if len(contextMap) == 0 {
 		return err
 	}
 
@@ -595,4 +654,28 @@ func GetAllContext(err error) map[string]interface{} {
 		return result
 	}
 	return make(map[string]interface{})
+}
+
+// NewWithStackControl 创建一个带有指定堆栈模式的错误
+func NewWithStackControl(message string, mode StackCaptureMode) error {
+	var stack StackProvider
+
+	switch mode {
+	case StackCaptureModeNever:
+		stack = nil
+	case StackCaptureModeImmediate:
+		stack = callers()
+	case StackCaptureModeDeferred:
+		stack = newLazyStack(4)
+	case StackCaptureModeModeSampled:
+		counter := atomic.AddInt32(&stackSampleCounter, 1)
+		if counter%int32(SamplingRate) == 0 {
+			stack = callers()
+		}
+	}
+
+	return &contextualError{
+		msg:   message,
+		stack: stack,
+	}
 }
