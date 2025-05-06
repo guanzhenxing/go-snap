@@ -342,30 +342,41 @@ func (e *testCustomCodeError) SetCode(code int) {
 }
 
 // 测试As方法
-func TestStdlibAs(t *testing.T) {
-	// 基本自定义错误测试
-	baseErr := &testCustomError{msg: "自定义错误"}
-	wrappedErr := Wrap(baseErr, "包装的自定义错误")
+func TestAsWithCustomTypes(t *testing.T) {
+	// 测试标准错误使用As
+	originalErr := &testCustomError{msg: "原始错误"}
+	wrappedErr := Wrap(originalErr, "包装错误")
 
-	var target *testCustomError
-	if !stderrors.As(wrappedErr, &target) {
-		t.Error("errors.As应该能够提取出包装的自定义错误")
+	// 尝试提取自定义错误
+	var customErr *testCustomError
+	if !stderrors.As(wrappedErr, &customErr) {
+		t.Error("标准库As应该能提取自定义错误类型")
+	} else if customErr.msg != "原始错误" {
+		t.Errorf("提取的自定义错误消息错误: %s", customErr.msg)
 	}
 
-	if target.msg != "自定义错误" {
-		t.Errorf("提取的错误消息错误: 期望 %q, 得到 %q", "自定义错误", target.msg)
+	// 测试错误码使用As
+	codeErr := &testCustomCodeError{code: 404, msg: "资源未找到"}
+	wrappedCodeErr := WrapWithCode(codeErr, 500, "服务器错误")
+
+	// 尝试提取带错误码的自定义错误
+	var extractedCodeErr *testCustomCodeError
+	if !stderrors.As(wrappedCodeErr, &extractedCodeErr) {
+		t.Error("标准库As应该能提取带错误码的自定义错误类型")
+	} else if extractedCodeErr.code != 404 {
+		t.Errorf("提取的错误码错误: %d", extractedCodeErr.code)
 	}
 
-	// 带错误码的测试
-	codeErr := NewWithCode(404, "未找到")
-	var targetCode *testCustomCodeError
+	// 测试非指针类型（会编译错误，因此跳过）
+	// var s string
+	// if stderrors.As(wrappedErr, s) {
+	//	t.Error("As不应该接受非指针目标")
+	// }
 
-	// 这可能会失败，因为我们的As实现是简化的
-	// 在实际实现中，需要使用反射正确处理这种情况
-	if stderrors.As(codeErr, &targetCode) {
-		if targetCode.code != 404 {
-			t.Errorf("提取的错误码错误: 期望 %d, 得到 %d", 404, targetCode.code)
-		}
+	// 测试nil错误
+	var nilErr *testCustomError
+	if stderrors.As(nil, &nilErr) {
+		t.Error("As对nil错误应返回false")
 	}
 }
 
@@ -401,4 +412,457 @@ func TestStdlibAggregateIs(t *testing.T) {
 	if stderrors.Is(agg, agg3) {
 		t.Error("包含不同错误的聚合错误不应该被识别为相等")
 	}
+}
+
+// 测试多种堆栈捕获模式下的New函数
+func TestNewWithAllStackCaptureModes(t *testing.T) {
+	// 保存原始配置
+	originalMode := DefaultStackCaptureMode
+	defer func() {
+		DefaultStackCaptureMode = originalMode
+	}()
+
+	// 测试所有模式
+	modes := []StackCaptureMode{
+		StackCaptureModeNever,
+		StackCaptureModeImmediate,
+		StackCaptureModeDeferred,
+		StackCaptureModeModeSampled,
+	}
+
+	for _, mode := range modes {
+		DefaultStackCaptureMode = mode
+		err := New("测试错误")
+
+		// 验证错误消息始终正确
+		if err.Error() != "测试错误" {
+			t.Errorf("模式 %v: New返回的错误消息不正确", mode)
+		}
+
+		// 验证堆栈跟踪行为符合预期
+		hasStack := false
+		if st, ok := err.(StackTracer); ok && st.StackTrace() != nil {
+			hasStack = true
+		}
+
+		switch mode {
+		case StackCaptureModeNever:
+			if hasStack {
+				t.Errorf("模式 %v: 不应有堆栈跟踪", mode)
+			}
+		case StackCaptureModeImmediate, StackCaptureModeDeferred:
+			if !hasStack {
+				t.Errorf("模式 %v: 应有堆栈跟踪", mode)
+			}
+			// 采样模式不做具体断言
+		}
+	}
+}
+
+// 测试多种堆栈捕获模式下的Errorf函数
+func TestErrorfWithDifferentStackModes(t *testing.T) {
+	// 保存原始配置
+	originalMode := DefaultStackCaptureMode
+	defer func() {
+		DefaultStackCaptureMode = originalMode
+	}()
+
+	// 测试基本功能
+	err := Errorf("格式化 %s 错误", "测试")
+	if err.Error() != "格式化 测试 错误" {
+		t.Errorf("Errorf消息格式化错误: %v", err)
+	}
+
+	// 测试带堆栈和不带堆栈的情况
+	modes := []struct {
+		mode            StackCaptureMode
+		shouldHaveStack bool
+	}{
+		{StackCaptureModeNever, false},
+		{StackCaptureModeImmediate, true},
+		{StackCaptureModeDeferred, true},
+	}
+
+	for _, tc := range modes {
+		DefaultStackCaptureMode = tc.mode
+		err := Errorf("测试")
+
+		hasStack := false
+		if st, ok := err.(StackTracer); ok && st.StackTrace() != nil {
+			hasStack = true
+		}
+
+		if hasStack != tc.shouldHaveStack {
+			t.Errorf("模式 %v: 堆栈跟踪存在状态 %v, 期望 %v",
+				tc.mode, hasStack, tc.shouldHaveStack)
+		}
+	}
+}
+
+// 测试WithContextMap函数增强版
+func TestWithContextMapExtended(t *testing.T) {
+	originalErr := New("原始错误")
+	contextMap := map[string]interface{}{
+		"requestID": "req123",
+		"userID":    123,
+	}
+
+	// 添加上下文
+	wrappedErr := WithContextMap(originalErr, contextMap)
+
+	// 测试获取上下文
+	if reqID, ok := GetContext(wrappedErr, "requestID"); !ok {
+		t.Error("应能获取requestID上下文")
+	} else if reqID != "req123" {
+		t.Errorf("requestID值错误: %v", reqID)
+	}
+
+	// 测试获取所有上下文
+	allContext := GetAllContext(wrappedErr)
+	if len(allContext) != 2 {
+		t.Errorf("上下文映射长度错误: %d", len(allContext))
+	}
+
+	// 测试nil错误
+	nilContextErr := WithContextMap(nil, contextMap)
+	if nilContextErr != nil {
+		t.Error("对nil错误使用WithContextMap应返回nil")
+	}
+
+	// 测试使用snake_case和camelCase混合的键
+	baseErr := fmt.Errorf("基础错误")
+	mixedMap := map[string]interface{}{
+		"request_id": "abc-123",
+		"userID":     456,
+	}
+
+	mixedErr := WithContextMap(baseErr, mixedMap)
+
+	// 验证可以获取两种命名风格的键
+	if reqID, ok := GetContext(mixedErr, "request_id"); !ok || reqID != "abc-123" {
+		t.Errorf("应能获取snake_case风格的请求ID: %v", reqID)
+	}
+
+	if userID, ok := GetContext(mixedErr, "userID"); !ok || userID != 456 {
+		t.Errorf("应能获取camelCase风格的用户ID: %v", userID)
+	}
+}
+
+// =================================================
+// 错误上下文测试
+// =================================================
+
+// 测试添加单个上下文值
+func TestWithContext(t *testing.T) {
+	baseErr := fmt.Errorf("基础错误")
+	contextErr := WithContext(baseErr, "request_id", "abc-123")
+
+	// 检查错误消息
+	if contextErr.Error() != baseErr.Error() {
+		t.Errorf("错误消息不匹配: 期望 %q, 得到 %q", baseErr.Error(), contextErr.Error())
+	}
+
+	// 获取上下文值
+	value, exists := GetContext(contextErr, "request_id")
+	if !exists {
+		t.Error("未能从错误中获取请求ID上下文")
+	}
+
+	strValue, ok := value.(string)
+	if !ok {
+		t.Errorf("上下文值类型错误: 期望 string, 得到 %T", value)
+	}
+
+	if strValue != "abc-123" {
+		t.Errorf("上下文值不匹配: 期望 %q, 得到 %q", "abc-123", strValue)
+	}
+
+	// 检查不存在的键
+	_, exists = GetContext(contextErr, "non_existent")
+	if exists {
+		t.Error("不应存在非存在的上下文键")
+	}
+
+	// nil错误处理
+	nilResult := WithContext(nil, "key", "value")
+	if nilResult != nil {
+		t.Error("WithContext(nil, ...) 应该返回 nil")
+	}
+}
+
+// 测试添加多个上下文值
+func TestWithContextMap(t *testing.T) {
+	baseErr := fmt.Errorf("基础错误")
+	contextMap := map[string]interface{}{
+		"request_id": "abc-123",
+		"user_id":    123,
+		"timestamp":  "2023-04-05T12:34:56Z",
+	}
+
+	contextErr := WithContextMap(baseErr, contextMap)
+
+	// 检查所有上下文值
+	allContext := GetAllContext(contextErr)
+	if len(allContext) != len(contextMap) {
+		t.Errorf("上下文值数量不匹配: 期望 %d, 得到 %d", len(contextMap), len(allContext))
+	}
+
+	// 逐个检查值
+	for k, expected := range contextMap {
+		actual, exists := allContext[k]
+		if !exists {
+			t.Errorf("上下文中应包含键 %q", k)
+			continue
+		}
+
+		if actual != expected {
+			t.Errorf("键 %q 的值不匹配: 期望 %v, 得到 %v", k, expected, actual)
+		}
+	}
+
+	// nil错误处理
+	nilResult := WithContextMap(nil, contextMap)
+	if nilResult != nil {
+		t.Error("WithContextMap(nil, ...) 应该返回 nil")
+	}
+
+	// 空映射处理
+	emptyResult := WithContextMap(baseErr, nil)
+	if emptyResult != baseErr {
+		t.Error("WithContextMap(err, nil) 应该返回原始错误")
+	}
+
+	// 测试使用requestID/userID格式的上下文键（合并TestWithContextMapExtended）
+	originalErr := New("原始错误")
+	extendedMap := map[string]interface{}{
+		"requestID": "req123",
+		"userID":    123,
+	}
+
+	// 添加上下文
+	wrappedErr := WithContextMap(originalErr, extendedMap)
+
+	// 测试获取上下文
+	if reqID, ok := GetContext(wrappedErr, "requestID"); !ok {
+		t.Error("应能获取requestID上下文")
+	} else if reqID != "req123" {
+		t.Errorf("requestID值错误: %v", reqID)
+	}
+
+	// 测试获取所有上下文
+	extendedContext := GetAllContext(wrappedErr)
+	if len(extendedContext) != 2 {
+		t.Errorf("上下文映射长度错误: %d", len(extendedContext))
+	}
+}
+
+// 测试上下文错误链
+func TestContextErrorChain(t *testing.T) {
+	// 创建带上下文的错误链
+	baseErr := fmt.Errorf("基础错误")
+	firstContext := WithContext(baseErr, "level", "base")
+	secondContext := WithContext(firstContext, "request_id", "abc-123")
+	thirdContext := WithContext(secondContext, "user_id", 456)
+
+	// 检查可以获取所有上下文值
+	level, exists := GetContext(thirdContext, "level")
+	if !exists || level != "base" {
+		t.Errorf("应能从链中获取第一层上下文，得到: %v", level)
+	}
+
+	requestID, exists := GetContext(thirdContext, "request_id")
+	if !exists || requestID != "abc-123" {
+		t.Errorf("应能从链中获取第二层上下文，得到: %v", requestID)
+	}
+
+	userID, exists := GetContext(thirdContext, "user_id")
+	if !exists || userID != 456 {
+		t.Errorf("应能从链中获取第三层上下文，得到: %v", userID)
+	}
+
+	// 获取所有上下文
+	allContext := GetAllContext(thirdContext)
+	if len(allContext) != 3 {
+		t.Errorf("应包含所有三个上下文键，但得到 %d 个", len(allContext))
+	}
+}
+
+// 测试上下文与包装函数的交互
+func TestContextWithWrapping(t *testing.T) {
+	baseErr := fmt.Errorf("基础错误")
+
+	// 先添加上下文，再包装
+	errWithContext := WithContext(baseErr, "request_id", "abc-123")
+	wrappedErr := Wrap(errWithContext, "包装错误")
+
+	// 应该能从包装错误中获取上下文
+	requestID, exists := GetContext(wrappedErr, "request_id")
+	if !exists || requestID != "abc-123" {
+		t.Errorf("应能从包装错误中获取上下文，得到: %v", requestID)
+	}
+
+	// 先包装，再添加上下文
+	wrappedFirst := Wrap(baseErr, "包装错误")
+	contextAfterWrap := WithContext(wrappedFirst, "user_id", 789)
+
+	// 应该能从上下文后的包装错误中获取上下文
+	userID, exists := GetContext(contextAfterWrap, "user_id")
+	if !exists || userID != 789 {
+		t.Errorf("应能从上下文后的包装错误中获取上下文，得到: %v", userID)
+	}
+}
+
+// 测试错误格式化输出中包含上下文
+func TestFormatWithContext(t *testing.T) {
+	baseErr := fmt.Errorf("基础错误")
+
+	// 添加多个上下文
+	contextErr := WithContext(baseErr, "request_id", "abc-123")
+	contextErr = WithContext(contextErr, "user_id", 456)
+
+	// 测试详细格式化输出（带+标志）
+	formatted := fmt.Sprintf("%+v", contextErr)
+
+	// 检查输出中包含上下文信息
+	if !strings.Contains(formatted, "request_id: abc-123") {
+		t.Errorf("格式化输出应包含request_id上下文，但得到: %s", formatted)
+	}
+
+	if !strings.Contains(formatted, "user_id: 456") {
+		t.Errorf("格式化输出应包含user_id上下文，但得到: %s", formatted)
+	}
+}
+
+// 测试复杂数据类型的上下文
+func TestComplexContextTypes(t *testing.T) {
+	baseErr := fmt.Errorf("基础错误")
+
+	// 添加各种类型的上下文数据
+	contextMap := map[string]interface{}{
+		"string_value":  "字符串",
+		"int_value":     42,
+		"boolean_value": true,
+		"float_value":   3.14,
+		"nil_value":     nil,
+		"slice_value":   []string{"a", "b", "c"},
+		"map_value":     map[string]int{"one": 1, "two": 2},
+		"struct_value":  struct{ Name string }{"测试"},
+	}
+
+	contextErr := WithContextMap(baseErr, contextMap)
+
+	// 获取并验证所有上下文值
+	allContext := GetAllContext(contextErr)
+
+	for key, expected := range contextMap {
+		actual, exists := allContext[key]
+		if !exists {
+			t.Errorf("上下文中应包含键 %q", key)
+			continue
+		}
+
+		// 特殊处理slice、map和struct的比较
+		switch key {
+		case "slice_value", "map_value", "struct_value":
+			// 仅检查类型，因为复杂类型的值相等比较较为复杂
+			expectedType := fmt.Sprintf("%T", expected)
+			actualType := fmt.Sprintf("%T", actual)
+			if expectedType != actualType {
+				t.Errorf("键 %q 的类型不匹配: 期望 %s, 得到 %s", key, expectedType, actualType)
+			}
+		default:
+			// 基本类型可以直接比较
+			if actual != expected {
+				t.Errorf("键 %q 的值不匹配: 期望 %v, 得到 %v", key, expected, actual)
+			}
+		}
+	}
+}
+
+// =================================================
+// 错误上下文使用示例
+// =================================================
+
+// ExampleWithContext 演示如何使用错误上下文功能为错误添加额外信息
+func ExampleWithContext() {
+	// 模拟从数据库查询失败的错误
+	baseErr := fmt.Errorf("数据库连接失败")
+
+	// 添加请求ID作为上下文
+	contextErr := WithContext(baseErr, "request_id", "req-123456")
+
+	// 添加更多上下文信息
+	contextErr = WithContext(contextErr, "user_id", 42)
+	contextErr = WithContext(contextErr, "operation", "查询用户")
+
+	// 包装错误并提供更多上下文
+	finalErr := Wrap(contextErr, "处理用户请求失败")
+
+	// 从错误中获取上下文信息
+	requestID, _ := GetContext(finalErr, "request_id")
+	fmt.Printf("请求ID: %s\n", requestID)
+
+	userID, _ := GetContext(finalErr, "user_id")
+	fmt.Printf("用户ID: %d\n", userID)
+
+	// 获取所有上下文信息
+	allContext := GetAllContext(finalErr)
+	fmt.Printf("所有上下文: %v\n", allContext)
+
+	// 使用格式化输出错误的详细信息（包括上下文）
+	fmt.Printf("详细错误: %+v\n", finalErr)
+}
+
+// Example_errorContext_HTTP 演示如何使用错误上下文与HTTP处理程序结合
+func Example_errorContext_HTTP() {
+	// 模拟HTTP请求处理
+	handleHTTPRequest()
+}
+
+// handleHTTPRequest 模拟HTTP请求处理函数
+func handleHTTPRequest() {
+	// 模拟请求信息
+	requestID := "req-789012"
+	userID := 123
+
+	// 调用业务逻辑
+	err := mockBusinessLogic(requestID, userID)
+	if err != nil {
+		// 在HTTP处理程序中，我们可以从错误中提取相关信息
+		code := -1
+		if c, ok := err.(interface{ Code() int }); ok {
+			code = c.Code()
+		}
+
+		// 从错误中提取上下文信息
+		reqID, _ := GetContext(err, "request_id")
+		uid, _ := GetContext(err, "user_id")
+
+		// 输出错误响应（在实际应用中，这会发送HTTP响应）
+		fmt.Printf("错误响应: {\"code\":%d, \"message\":\"%s\", \"request_id\":\"%v\", \"user_id\":%v}\n",
+			code, err.Error(), reqID, uid)
+		return
+	}
+
+	fmt.Println("请求处理成功")
+}
+
+// mockBusinessLogic 模拟业务逻辑
+func mockBusinessLogic(requestID string, userID int) error {
+	// 模拟数据库操作错误
+	dbErr := fmt.Errorf("用户数据未找到")
+	_ = dbErr // 避免未使用警告
+
+	// 创建带有错误码和上下文的错误
+	err := NewWithCode(404, "用户不存在")
+
+	// 添加请求上下文
+	err = WithContextMap(err, map[string]interface{}{
+		"request_id": requestID,
+		"user_id":    userID,
+		"timestamp":  "2023-04-05T12:34:56Z",
+	})
+
+	// 包装原始错误
+	return Wrap(err, "获取用户数据失败")
 }
