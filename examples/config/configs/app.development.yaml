@@ -1,0 +1,29 @@
+# 开发环境配置
+
+app:
+  name: "go-snap-app-dev"
+  env: "development"
+  debug: true
+  version: "1.0.0-dev"
+
+server:
+  host: "127.0.0.1"
+  port: 8080
+  timeout: "60s"  # 开发环境延长超时时间
+
+database:
+  driver: "mysql"
+  dsn: "user:password@tcp(localhost:3306)/dbname_dev?charset=utf8mb4&parseTime=True&loc=Local"
+  max_open_conns: 10  # 开发环境减少连接数
+  max_idle_conns: 5
+  conn_max_lifetime: "2h"
+
+redis:
+  addr: "localhost:6379"
+  password: ""
+  db: 1  # 开发环境使用不同的DB
+  
+logging:
+  level: "debug"
+  output: "console"
+  file_path: "./logs/app-dev.log" 

@@ -1,0 +1,29 @@
+# 默认应用配置
+
+app:
+  name: "go-snap-app"
+  env: "development"  # 环境：development, testing, staging, production
+  debug: true
+  version: "1.0.0"
+
+server:
+  host: "127.0.0.1"
+  port: 8080
+  timeout: "30s"
+
+database:
+  driver: "mysql"
+  dsn: "user:password@tcp(localhost:3306)/dbname?charset=utf8mb4&parseTime=True&loc=Local"
+  max_open_conns: 100
+  max_idle_conns: 10
+  conn_max_lifetime: "1h"
+
+redis:
+  addr: "localhost:6379"
+  password: ""
+  db: 0
+  
+logging:
+  level: "debug"  # debug, info, warn, error
+  output: "console"  # console, file
+  file_path: "./logs/app.log" 

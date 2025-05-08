@@ -1,0 +1,29 @@
+app:
+  name: go-snap-app
+  env: development
+  debug: true
+
+server:
+  host: localhost
+  port: 8080
+
+database:
+  dsn: "user:password@tcp(localhost:3306)/dbname?charset=utf8mb4&parseTime=True&loc=Local"
+  max_open_conn: 100
+  max_idle_conn: 10
+  max_lifetime: 3600
+
+redis:
+  addr: "localhost:6379"
+  password: ""
+  db: 0
+
+logging:
+  level: info
+  format: json
+  output: ["console", "file"]
+  file_path: "./logs/app.log"
+  max_size: 100
+  max_backups: 3
+  max_age: 30
+  compress: true

@@ -1,0 +1,29 @@
+app:
+  name: go-snap-app
+  env: production
+  debug: false
+
+server:
+  host: 0.0.0.0
+  port: 80
+
+database:
+  dsn: "user:password@tcp(db.example.com:3306)/production_db?charset=utf8mb4&parseTime=True&loc=Local"
+  max_open_conn: 200
+  max_idle_conn: 20
+  max_lifetime: 3600
+
+redis:
+  addr: "redis.example.com:6379"
+  password: "strong-password"
+  db: 0
+
+logging:
+  level: warn
+  format: json
+  output: ["file"]
+  file_path: "/var/log/go-snap/app.log"
+  max_size: 500
+  max_backups: 10
+  max_age: 90
+  compress: true 

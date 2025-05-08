@@ -1,0 +1,29 @@
+# 生产环境配置
+
+app:
+  name: "go-snap-app-prod"
+  env: "production"
+  debug: false  # 生产环境禁用调试模式
+  version: "1.0.0"
+
+server:
+  host: "0.0.0.0"  # 生产环境监听所有网卡
+  port: 80
+  timeout: "30s"
+
+database:
+  driver: "mysql"
+  dsn: "prod_user:strong_password@tcp(db.example.com:3306)/dbname_prod?charset=utf8mb4&parseTime=True&loc=Local"
+  max_open_conns: 200  # 生产环境增加连接数
+  max_idle_conns: 50
+  conn_max_lifetime: "1h"
+
+redis:
+  addr: "redis.example.com:6379"
+  password: "redis_password" # 生产环境使用密码
+  db: 0
+  
+logging:
+  level: "info"  # 生产环境提高日志级别
+  output: "file"  # 生产环境写入文件
+  file_path: "/var/log/app-prod.log" 
