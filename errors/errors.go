@@ -679,3 +679,33 @@ func NewWithStackControl(message string, mode StackCaptureMode) error {
 		stack: stack,
 	}
 }
+
+//=====================================================
+// 标准兼容函数
+//=====================================================
+
+// Is 判断err错误链中是否包含目标错误target。
+// 这是对标准库errors.Is的包装，提供完全相同的功能。
+//
+// 示例:
+//
+//	if errors.Is(err, io.EOF) {
+//	    // 处理EOF错误
+//	}
+func Is(err, target error) bool {
+	return stderrors.Is(err, target)
+}
+
+// As 查找err错误链中与target类型匹配的第一个错误，如果找到则将其值设置到target并返回true。
+// target必须是一个指向实现了error接口的类型的非空指针，如*MyError。
+// 这是对标准库errors.As的包装，提供完全相同的功能。
+//
+// 示例:
+//
+//	var myErr *MyError
+//	if errors.As(err, &myErr) {
+//	    // 处理myErr
+//	}
+func As(err error, target interface{}) bool {
+	return stderrors.As(err, target)
+}

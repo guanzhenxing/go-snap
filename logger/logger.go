@@ -4,12 +4,13 @@ package logger
 
 import (
 	"context"
-	"errors"
 	"os"
 	"strings"
 	"sync"
 	"sync/atomic"
 	"time"
+
+	"github.com/guanzhenxing/go-snap/errors"
 
 	"go.uber.org/zap"
 	"go.uber.org/zap/zapcore"
