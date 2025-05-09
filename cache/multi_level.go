@@ -2,9 +2,10 @@ package cache
 
 import (
 	"context"
-	"errors"
 	"fmt"
 	"time"
+
+	"github.com/guanzhenxing/go-snap/errors"
 )
 
 // CacheLevel 表示缓存层级

@@ -1,11 +1,12 @@
 package lock
 
 import (
-	"errors"
+	"github.com/guanzhenxing/go-snap/errors"
 )
 
 // 锁相关错误定义
 var (
+
 	// ErrAcquireLockFailed 表示获取锁失败
 	ErrAcquireLockFailed = errors.New("failed to acquire lock after retries")
 

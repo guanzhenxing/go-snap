@@ -1,10 +1,11 @@
 package config
 
 import (
-	"errors"
 	"fmt"
 	"reflect"
 	"strings"
+
+	"github.com/guanzhenxing/go-snap/errors"
 
 	"github.com/go-playground/validator/v10"
 )

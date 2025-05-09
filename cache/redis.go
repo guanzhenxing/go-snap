@@ -2,10 +2,11 @@ package cache
 
 import (
 	"context"
-	"errors"
 	"fmt"
 	"strings"
 	"time"
+
+	"github.com/guanzhenxing/go-snap/errors"
 
 	"github.com/redis/go-redis/v9"
 )
