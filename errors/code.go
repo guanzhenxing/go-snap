@@ -79,7 +79,7 @@ var errorCodeRegistry sync.Map
 
 // UnknownError 是默认的错误码，用于没有特定错误码的错误。
 var (
-	UnknownError ErrorCode = NewErrorCode(0, http.StatusInternalServerError, "发生了内部服务器错误", "http://github.com/guanzhenxing/go-snap/errors/README.md")
+	UnknownError ErrorCode = NewErrorCode(1, http.StatusInternalServerError, "发生了内部服务器错误", "http://github.com/guanzhenxing/go-snap/errors/README.md")
 )
 
 func init() {
@@ -123,8 +123,8 @@ func NewErrorCode(code int, httpStatus int, message string, reference string) Er
 //	}
 func Register(ec ErrorCode) ErrorCode {
 	// 特殊处理UnknownError
-	if ec.Code() == 0 && ec != UnknownError {
-		panic("错误码 `0` 已被 `go-snap` 保留用作 UnknownError 错误码")
+	if ec.Code() == 1 && ec != UnknownError {
+		panic("错误码 `1` 已被 `go-snap` 保留用作 UnknownError 错误码")
 	}
 
 	errorCodeRegistry.Store(ec.Code(), ec)
@@ -153,8 +153,8 @@ func RegisterErrorCodes(codes []ErrorCode) {
 // 这对于在包init函数中定义的错误码特别有用。
 func MustRegister(ec ErrorCode) ErrorCode {
 	// 特殊处理UnknownError
-	if ec.Code() == 0 && ec != UnknownError {
-		panic("错误码 '0' 已被 'go-snap' 保留用作 UnknownError 错误码")
+	if ec.Code() == 1 && ec != UnknownError {
+		panic("错误码 '1' 已被 'go-snap' 保留用作 UnknownError 错误码")
 	}
 
 	if _, exists := errorCodeRegistry.Load(ec.Code()); exists {

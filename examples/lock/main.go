@@ -27,7 +27,7 @@ func main() {
 	_, err := redisClient.Ping(ctx).Result()
 	if err != nil {
 		fmt.Printf("Redis连接失败: %v\n", err)
-		fmt.Println("继续展示代码结构...\n")
+		fmt.Println("继续展示代码结构...")
 	} else {
 		fmt.Println("Redis连接成功!")
 
@@ -57,7 +57,7 @@ func main() {
 	redisCache, err := cache.NewRedisCache(redisOpts, nil)
 	if err != nil {
 		fmt.Printf("Redis缓存创建失败: %v\n", err)
-		fmt.Println("继续展示代码结构...\n")
+		fmt.Println("继续展示代码结构...")
 	} else {
 		fmt.Println("Redis缓存创建成功!")
 
