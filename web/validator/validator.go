@@ -4,6 +4,7 @@ package validator
 import (
 	"fmt"
 	"reflect"
+	"regexp"
 	"strings"
 
 	"github.com/gin-gonic/gin"
@@ -15,6 +16,31 @@ import (
 
 // 验证器实例
 var validate = validator.New()
+
+// defaultValidator 实现 binding.StructValidator 接口
+// 使 Gin 的参数绑定和自定义校验器一致
+type defaultValidator struct {
+	validator *validator.Validate
+}
+
+func (v *defaultValidator) ValidateStruct(obj interface{}) error {
+	if kindOfData(obj) == reflect.Struct {
+		return v.validator.Struct(obj)
+	}
+	return nil
+}
+
+func (v *defaultValidator) Engine() interface{} {
+	return v.validator
+}
+
+func kindOfData(data interface{}) reflect.Kind {
+	value := reflect.ValueOf(data)
+	for value.Kind() == reflect.Ptr {
+		value = value.Elem()
+	}
+	return value.Kind()
+}
 
 // Setup 设置参数验证
 func Setup() {
@@ -31,6 +57,10 @@ func Setup() {
 			return name
 		})
 	}
+	// 也给包级 validate 注册自定义校验器
+	registerCustomValidators(validate)
+	// 用 defaultValidator 包装 validate 实例，赋值给 binding.Validator
+	binding.Validator = &defaultValidator{validator: validate}
 }
 
 // registerCustomValidators 注册自定义验证器
@@ -38,6 +68,15 @@ func registerCustomValidators(v *validator.Validate) {
 	// 手机号验证器
 	_ = v.RegisterValidation("mobile", func(fl validator.FieldLevel) bool {
 		return len(fl.Field().String()) == 11
+	})
+
+	// 自定义邮箱验证器
+	_ = v.RegisterValidation("email", func(fl validator.FieldLevel) bool {
+		email := fl.Field().String()
+		// 使用正则表达式验证邮箱格式
+		emailRegex := `^[a-zA-Z0-9._%+-]+@[a-zA-Z0-9.-]+\.[a-zA-Z]{2,}$`
+		matched, _ := regexp.MatchString(emailRegex, email)
+		return matched
 	})
 
 	// 可以添加更多自定义验证器...
