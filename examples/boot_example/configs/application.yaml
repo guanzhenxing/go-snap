@@ -1,0 +1,22 @@
+app:
+  name: BootExample
+  version: 1.0.0
+  env: development
+  debug: true
+
+logger:
+  enabled: true
+  level: debug
+  json: false
+
+# 启用数据库
+database:
+  enabled: true
+  driver: sqlite
+  dsn: ":memory:"
+
+# 启用Web服务器
+web:
+  enabled: true
+  port: 8080
+  host: 0.0.0.0 
