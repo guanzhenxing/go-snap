@@ -1,4 +1,4 @@
-package snapcore
+package appcore
 
 import (
 	"context"
@@ -17,6 +17,9 @@ type WebComponent struct {
 	logger  logger.Logger
 	options []web.Option
 }
+
+// 确保WebComponent实现了WebProvider接口
+var _ WebProvider = (*WebComponent)(nil)
 
 // NewWebComponent 创建Web组件
 func NewWebComponent(options ...web.Option) *WebComponent {
@@ -72,11 +75,6 @@ func (c *WebComponent) Type() ComponentType {
 	return ComponentTypeWeb
 }
 
-// Dependencies 获取组件依赖
-func (c *WebComponent) Dependencies() []string {
-	return []string{"config", "logger"}
-}
-
 // GetServer 获取Web服务器实例
 func (c *WebComponent) GetServer() *web.Server {
 	return c.server
@@ -90,4 +88,15 @@ func (c *WebComponent) SetConfig(config config.Provider) {
 // SetLogger 设置日志器
 func (c *WebComponent) SetLogger(logger logger.Logger) {
 	c.logger = logger
+}
+
+// NewWebProvider 提供Web组件
+func NewWebProvider(config config.Provider, logger logger.Logger) (WebProvider, error) {
+	component := NewWebComponent()
+	component.SetConfig(config)
+	component.SetLogger(logger)
+	if err := component.Initialize(context.Background()); err != nil {
+		return nil, err
+	}
+	return component, nil
 }

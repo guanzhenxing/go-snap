@@ -1,4 +1,4 @@
-package snapcore
+package appcore
 
 import (
 	"context"
@@ -19,6 +19,9 @@ type ConfigComponent struct {
 	watcher    *config.Watcher
 	logger     logger.Logger
 }
+
+// 确保ConfigComponent实现了ConfigProvider接口
+var _ ConfigProvider = (*ConfigComponent)(nil)
 
 // NewConfigComponent 创建配置组件
 func NewConfigComponent(configPath string, opts ...config.Option) *ConfigComponent {
@@ -138,11 +141,6 @@ func (c *ConfigComponent) Type() ComponentType {
 	return ComponentTypeInfrastructure
 }
 
-// Dependencies 获取组件依赖
-func (c *ConfigComponent) Dependencies() []string {
-	return []string{} // 配置组件通常是基础组件，没有依赖
-}
-
 // GetConfig 获取配置提供器
 func (c *ConfigComponent) GetConfig() config.Provider {
 	return c.config
@@ -151,4 +149,13 @@ func (c *ConfigComponent) GetConfig() config.Provider {
 // SetLogger 设置日志器
 func (c *ConfigComponent) SetLogger(logger logger.Logger) {
 	c.logger = logger
+}
+
+// NewConfigProvider 提供配置组件
+func NewConfigProvider(configPath string) (ConfigProvider, config.Provider, error) {
+	component := NewConfigComponent(configPath)
+	if err := component.Initialize(context.Background()); err != nil {
+		return nil, nil, err
+	}
+	return component, component.GetConfig(), nil
 }

@@ -1,8 +1,13 @@
 // Package snapcore 提供了应用生命周期管理、组件协调和配置分发功能
-package snapcore
+package appcore
 
 import (
 	"context"
+
+	"github.com/guanzhenxing/go-snap/config"
+	"github.com/guanzhenxing/go-snap/dbstore"
+	"github.com/guanzhenxing/go-snap/logger"
+	"github.com/guanzhenxing/go-snap/web"
 )
 
 // ComponentType 组件类型枚举，用于控制初始化和关闭顺序
@@ -35,9 +40,38 @@ type Component interface {
 
 	// Type 获取组件类型
 	Type() ComponentType
+}
 
-	// Dependencies 获取组件依赖
-	Dependencies() []string
+// 组件功能接口定义
+
+// ConfigProvider 配置组件接口
+type ConfigProvider interface {
+	Component
+	GetConfig() config.Provider
+}
+
+// LoggerProvider 日志组件接口
+type LoggerProvider interface {
+	Component
+	GetLogger() logger.Logger
+}
+
+// DBStoreProvider 数据库组件接口
+type DBStoreProvider interface {
+	Component
+	GetDBStore() *dbstore.Store
+}
+
+// CacheProvider 缓存组件接口
+type CacheProvider interface {
+	Component
+	GetCache() interface{} // 根据实际缓存接口调整
+}
+
+// WebProvider Web服务组件接口
+type WebProvider interface {
+	Component
+	GetServer() *web.Server
 }
 
 // HookType 定义生命周期钩子类型
@@ -88,28 +122,6 @@ const (
 	AppStateFailed
 )
 
-// ComponentState 组件状态
-type ComponentState int
-
-const (
-	// ComponentStateCreated 组件已创建
-	ComponentStateCreated ComponentState = iota
-	// ComponentStateInitializing 组件正在初始化
-	ComponentStateInitializing
-	// ComponentStateInitialized 组件已初始化
-	ComponentStateInitialized
-	// ComponentStateStarting 组件正在启动
-	ComponentStateStarting
-	// ComponentStateRunning 组件正在运行
-	ComponentStateRunning
-	// ComponentStateStopping 组件正在停止
-	ComponentStateStopping
-	// ComponentStateStopped 组件已停止
-	ComponentStateStopped
-	// ComponentStateFailed 组件运行失败
-	ComponentStateFailed
-)
-
 // StateChangeListener 状态变更监听器
 type StateChangeListener func(name string, oldState, newState interface{})
 
@@ -127,46 +139,6 @@ type ApplicationContext interface {
 	// GetAppState 获取应用状态
 	GetAppState() AppState
 
-	// GetComponentState 获取组件状态
-	GetComponentState(name string) ComponentState
-
 	// RegisterStateChangeListener 注册状态变更监听器
 	RegisterStateChangeListener(listener StateChangeListener)
-}
-
-// Plugin 插件接口
-type Plugin interface {
-	// Name 获取插件名称
-	Name() string
-
-	// Register 注册组件
-	Register(ctx ApplicationContext) error
-
-	// Unregister 卸载组件
-	Unregister(ctx ApplicationContext) error
-}
-
-// ComponentDecorator 组件装饰器
-type ComponentDecorator interface {
-	// Decorate 装饰组件
-	Decorate(component Component) Component
-}
-
-// StateMonitor 状态监控接口
-type StateMonitor interface {
-	// GetAppState 获取应用状态
-	GetAppState() AppState
-
-	// GetComponentState 获取组件状态
-	GetComponentState(name string) ComponentState
-
-	// RegisterStateChangeListener 注册状态变更监听器
-	RegisterStateChangeListener(listener StateChangeListener)
-}
-
-// ComponentRegistration 组件注册信息
-type ComponentRegistration struct {
-	Name         string
-	Component    Component
-	Dependencies []string
 }
