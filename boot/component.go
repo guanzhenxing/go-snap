@@ -2,6 +2,42 @@ package boot
 
 import "context"
 
+// ComponentStatus 组件状态
+type ComponentStatus int
+
+const (
+	// ComponentStatusUnknown 未知状态
+	ComponentStatusUnknown ComponentStatus = iota
+	// ComponentStatusCreated 已创建
+	ComponentStatusCreated
+	// ComponentStatusInitialized 已初始化
+	ComponentStatusInitialized
+	// ComponentStatusStarted 已启动
+	ComponentStatusStarted
+	// ComponentStatusStopped 已停止
+	ComponentStatusStopped
+	// ComponentStatusFailed 失败
+	ComponentStatusFailed
+)
+
+// String 返回状态字符串
+func (s ComponentStatus) String() string {
+	switch s {
+	case ComponentStatusCreated:
+		return "Created"
+	case ComponentStatusInitialized:
+		return "Initialized"
+	case ComponentStatusStarted:
+		return "Started"
+	case ComponentStatusStopped:
+		return "Stopped"
+	case ComponentStatusFailed:
+		return "Failed"
+	default:
+		return "Unknown"
+	}
+}
+
 // Component 组件接口
 type Component interface {
 	// Name 返回组件名称
@@ -18,6 +54,15 @@ type Component interface {
 
 	// Stop 停止组件
 	Stop(ctx context.Context) error
+
+	// HealthCheck 健康检查
+	HealthCheck() error
+
+	// GetStatus 获取组件状态
+	GetStatus() ComponentStatus
+
+	// GetMetrics 获取组件指标
+	GetMetrics() map[string]interface{}
 }
 
 // ComponentType 组件类型
@@ -37,6 +82,21 @@ const (
 	ComponentTypeWeb
 )
 
+// ConfigSchema 配置模式
+type ConfigSchema struct {
+	RequiredProperties []string                  `json:"required_properties"`
+	Properties         map[string]PropertySchema `json:"properties"`
+	Dependencies       []string                  `json:"dependencies"`
+}
+
+// PropertySchema 属性模式
+type PropertySchema struct {
+	Type         string      `json:"type"`
+	DefaultValue interface{} `json:"default_value"`
+	Description  string      `json:"description"`
+	Required     bool        `json:"required"`
+}
+
 // ComponentFactory 组件工厂接口
 type ComponentFactory interface {
 	// Create 创建组件实例
@@ -44,6 +104,12 @@ type ComponentFactory interface {
 
 	// Dependencies 返回依赖的组件名称
 	Dependencies() []string
+
+	// ValidateConfig 验证配置
+	ValidateConfig(props PropertySource) error
+
+	// GetConfigSchema 获取配置模式
+	GetConfigSchema() ConfigSchema
 }
 
 // BeanProvider Bean提供者接口
@@ -59,6 +125,9 @@ type AutoConfigurer interface {
 
 	// Order 配置顺序，数字越小优先级越高
 	Order() int
+
+	// GetName 获取配置器名称
+	GetName() string
 }
 
 // ComponentActivator 组件激活器接口
@@ -124,4 +193,18 @@ func ConditionalOnMissingProperty(key string) *PropertyCondition {
 		Key:      key,
 		Operator: "not-exists",
 	}
+}
+
+// ComponentHealthChecker 组件健康检查器
+type ComponentHealthChecker interface {
+	// CheckHealth 检查组件健康状态
+	CheckHealth(component Component) error
+}
+
+// DefaultHealthChecker 默认健康检查器
+type DefaultHealthChecker struct{}
+
+// CheckHealth 检查组件健康状态
+func (h *DefaultHealthChecker) CheckHealth(component Component) error {
+	return component.HealthCheck()
 }
