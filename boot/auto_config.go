@@ -4,24 +4,6 @@ import (
 	"sort"
 )
 
-// AutoConfigurer 自动配置器接口
-type AutoConfigurer interface {
-	// Configure 配置组件
-	Configure(registry *ComponentRegistry, props PropertySource) error
-
-	// Order 配置顺序，数字越小优先级越高
-	Order() int
-}
-
-// ComponentActivator 组件激活器接口
-type ComponentActivator interface {
-	// ShouldActivate 判断组件是否应该激活
-	ShouldActivate(props PropertySource) bool
-
-	// ComponentType 组件类型
-	ComponentType() string
-}
-
 // AutoConfig 自动配置引擎
 type AutoConfig struct {
 	configurers []AutoConfigurer
@@ -115,55 +97,5 @@ func (a *AutoConfig) setDefaultProperties(props PropertySource) {
 		if !props.HasProperty("web.host") {
 			props.SetProperty("web.host", "0.0.0.0")
 		}
-	}
-}
-
-// 基于属性的条件
-type PropertyCondition struct {
-	Key      string
-	Value    interface{}
-	Operator string // equals, not-equals, exists, not-exists
-}
-
-// Matches 判断条件是否匹配
-func (c *PropertyCondition) Matches(props PropertySource) bool {
-	switch c.Operator {
-	case "equals":
-		val, exists := props.GetProperty(c.Key)
-		return exists && val == c.Value
-	case "not-equals":
-		val, exists := props.GetProperty(c.Key)
-		return !exists || val != c.Value
-	case "exists":
-		return props.HasProperty(c.Key)
-	case "not-exists":
-		return !props.HasProperty(c.Key)
-	default:
-		return false
-	}
-}
-
-// ConditionalOnProperty 属性条件
-func ConditionalOnProperty(key string, value interface{}) *PropertyCondition {
-	return &PropertyCondition{
-		Key:      key,
-		Value:    value,
-		Operator: "equals",
-	}
-}
-
-// ConditionalOnPropertyExists 属性存在条件
-func ConditionalOnPropertyExists(key string) *PropertyCondition {
-	return &PropertyCondition{
-		Key:      key,
-		Operator: "exists",
-	}
-}
-
-// ConditionalOnMissingProperty 属性不存在条件
-func ConditionalOnMissingProperty(key string) *PropertyCondition {
-	return &PropertyCondition{
-		Key:      key,
-		Operator: "not-exists",
 	}
 }
