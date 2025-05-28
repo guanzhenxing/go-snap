@@ -247,6 +247,7 @@ func New(message string) error {
 
 	return &contextualError{
 		msg:   message,
+		code:  UnknownError.Code(),
 		stack: stack,
 	}
 }
@@ -278,6 +279,7 @@ func Errorf(format string, args ...interface{}) error {
 
 	return &contextualError{
 		msg:   fmt.Sprintf(format, args...),
+		code:  UnknownError.Code(),
 		stack: stack,
 	}
 }
@@ -676,6 +678,7 @@ func NewWithStackControl(message string, mode StackCaptureMode) error {
 
 	return &contextualError{
 		msg:   message,
+		code:  UnknownError.Code(),
 		stack: stack,
 	}
 }

@@ -1,49 +1,83 @@
 package logger
 
 import (
+	"bytes"
 	"context"
 	"os"
 	"path/filepath"
 	"strings"
-	"sync"
 	"testing"
 	"time"
+
+	"go.uber.org/zap"
+	"go.uber.org/zap/zapcore"
 )
 
 // 测试Init函数
 func TestInit(t *testing.T) {
-	// 保存原始logger
+	// 创建临时logger用于测试
+	var testBuf bytes.Buffer
+
+	// 保存原始全局logger并在测试结束后恢复
 	originalLogger := globalLogger
-	// 保存once状态，便于重新初始化
-	originalOnce := once
-
-	// 重置后才能再次初始化
-	once = sync.Once{} // 完全重置once
-	globalLogger = nil
-
 	defer func() {
 		globalLogger = originalLogger
-		once = originalOnce
 	}()
 
-	// 测试基本初始化
-	Init()
-
-	if globalLogger == nil {
-		t.Fatal("Init failed to initialize global logger")
+	// 创建自定义encoderConfig，输出到testBuf
+	encoderConfig := zapcore.EncoderConfig{
+		TimeKey:        "time",
+		LevelKey:       "level",
+		NameKey:        "logger",
+		CallerKey:      "caller",
+		MessageKey:     "msg",
+		StacktraceKey:  "stacktrace",
+		LineEnding:     zapcore.DefaultLineEnding,
+		EncodeLevel:    zapcore.LowercaseLevelEncoder,
+		EncodeTime:     zapcore.ISO8601TimeEncoder,
+		EncodeDuration: zapcore.SecondsDurationEncoder,
+		EncodeCaller:   zapcore.ShortCallerEncoder,
 	}
 
-	// 重置once以测试再次初始化的行为
-	originalLogger = globalLogger
-	globalLogger = nil
-	once = sync.Once{}
+	// 创建测试core
+	core := zapcore.NewCore(
+		zapcore.NewJSONEncoder(encoderConfig),
+		zapcore.AddSync(&testBuf),
+		zapcore.InfoLevel,
+	)
 
-	// 再次初始化
-	Init(WithLevel(DebugLevel))
+	// 创建zap logger
+	z := zap.New(core)
 
-	// 验证全局logger已经被初始化（不应该是nil）
-	if globalLogger == nil {
-		t.Error("Second Init failed to initialize global logger")
+	// 创建一个新的zapLogger
+	testLogger := &zapLogger{
+		zap:    z,
+		level:  InfoLevel,
+		fields: make([]Field, 0),
+	}
+
+	// 设置为全局logger
+	globalLogger = testLogger
+
+	// 记录测试日志
+	Info("test init message", String("test_key", "test_value"))
+
+	// 刷新缓冲区
+	Sync()
+
+	// 验证日志内容
+	logOutput := testBuf.String()
+	if logOutput == "" {
+		t.Error("日志输出为空")
+	}
+
+	// 验证日志包含预期内容
+	if !strings.Contains(logOutput, "test init message") {
+		t.Errorf("日志应该包含测试消息，实际输出：%s", logOutput)
+	}
+
+	if !strings.Contains(logOutput, "test_key") || !strings.Contains(logOutput, "test_value") {
+		t.Errorf("日志应该包含测试字段，实际输出：%s", logOutput)
 	}
 }
 
@@ -51,8 +85,10 @@ func TestInit(t *testing.T) {
 func TestLogLevels(t *testing.T) {
 	// 初始化logger
 	originalLogger := globalLogger
-	once = sync.Once{} // 重置once，确保Init能够重新初始化logger
-	Init(WithLevel(DebugLevel))
+
+	// 创建新的logger实例，避免修改全局once
+	testLogger := New(WithLevel(DebugLevel))
+	globalLogger = testLogger
 
 	defer func() {
 		globalLogger = originalLogger

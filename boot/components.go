@@ -71,7 +71,8 @@ func (c *BaseComponent) GetMetrics() map[string]interface{} {
 	result["name"] = c.name
 	result["type"] = c.compType
 	if !c.startTime.IsZero() {
-		result["uptime"] = time.Since(c.startTime).String()
+		result["start_time"] = c.startTime
+		result["uptime"] = time.Since(c.startTime)
 	}
 
 	return result

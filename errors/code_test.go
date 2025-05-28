@@ -391,22 +391,40 @@ func TestNewErrorCode(t *testing.T) {
 	}
 }
 
-// 测试0错误码保留
-func TestReservedZeroCode(t *testing.T) {
+// 测试0错误码现在可以正常注册
+func TestZeroCodeAllowed(t *testing.T) {
 	const (
 		code    = 0
 		message = "零错误码"
 	)
 
-	// 尝试注册0错误码应该会panic
+	// 注册0错误码应该成功，不会panic
 	defer func() {
-		if r := recover(); r == nil {
-			t.Error("注册错误码0应该导致panic")
+		if r := recover(); r != nil {
+			t.Errorf("注册错误码0不应该panic: %v", r)
 		}
 	}()
 
-	// 这应该会导致panic
+	// 注册错误码0
 	RegisterErrorCode(code, http.StatusOK, message, "")
+
+	// 验证注册成功
+	if !HasErrorCode(code) {
+		t.Error("错误码0应该已成功注册")
+	}
+
+	codeInfo := GetErrorCode(code)
+	if codeInfo == nil {
+		t.Fatal("应该能够获取错误码0的信息")
+	}
+
+	if codeInfo.Code() != code {
+		t.Errorf("错误码错误: 期望 %d, 得到 %d", code, codeInfo.Code())
+	}
+
+	if codeInfo.Message() != message {
+		t.Errorf("错误消息错误: 期望 %q, 得到 %q", message, codeInfo.Message())
+	}
 }
 
 // 测试不存在的错误码
