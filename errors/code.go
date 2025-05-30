@@ -518,13 +518,13 @@ func ListErrorCodes() []int {
 }
 
 // GetErrorCode 根据错误码整数值获取对应的错误码对象。
-// 如果找不到对应的错误码，返回UnknownError。
+// 如果找不到对应的错误码，返回nil。
 //
 // 参数：
 //   - code: 错误码整数值
 //
 // 返回：
-//   - ErrorCode: 对应的错误码对象，未找到则返回UnknownError
+//   - ErrorCode: 对应的错误码对象，未找到则返回nil
 //
 // 示例:
 //
@@ -534,7 +534,7 @@ func GetErrorCode(code int) ErrorCode {
 	if v, ok := errorCodeRegistry.Load(code); ok {
 		return v.(ErrorCode)
 	}
-	return UnknownError
+	return nil
 }
 
 // HasErrorCode 检查指定的错误码是否已注册。

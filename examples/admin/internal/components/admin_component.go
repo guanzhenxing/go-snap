@@ -77,6 +77,14 @@ func (c *AdminComponent) Status() string {
 	return c.status
 }
 
+// getLoggerFromComponent 从组件中提取Logger接口
+// 这个辅助函数通过接口分离解决接口冲突问题
+func getLoggerFromComponent(component interface{}) (logger.Logger, bool) {
+	// 尝试将组件转换为logger.Logger接口
+	log, ok := component.(logger.Logger)
+	return log, ok
+}
+
 // Initialize 初始化组件
 func (c *AdminComponent) Initialize(ctx context.Context) error {
 	// 获取应用
@@ -90,7 +98,13 @@ func (c *AdminComponent) Initialize(ctx context.Context) error {
 	if !found {
 		return fmt.Errorf("找不到logger组件")
 	}
-	c.log = loggerComponent.(logger.Logger)
+
+	// 通过辅助函数提取Logger接口
+	loggerInstance, ok := getLoggerFromComponent(loggerComponent)
+	if !ok {
+		return fmt.Errorf("logger组件不是有效的logger.Logger实例")
+	}
+	c.log = loggerInstance
 
 	// 加载配置
 	props := app.GetPropertySource()
