@@ -1,3 +1,69 @@
+// Package boot 提供应用程序启动和生命周期管理功能。
+// 该包实现了一个类似Spring Boot的应用程序引导框架，支持自动配置、组件管理和生命周期控制。
+//
+// # 应用生命周期
+//
+// 应用程序生命周期分为以下几个阶段：
+//
+// 1. 创建阶段：创建应用实例和基础设施组件
+//   - 加载配置文件
+//   - 创建组件注册表
+//   - 创建事件总线
+//   - 创建自动配置引擎
+//
+// 2. 初始化阶段：应用配置和组件注册
+//   - 注册自动配置器
+//   - 注册用户定义的组件
+//   - 配置所有组件
+//   - 解析组件依赖关系
+//
+// 3. 启动阶段：按照依赖顺序启动组件
+//   - 按类型优先级启动组件（基础设施 -> 数据源 -> 核心 -> Web）
+//   - 发布ApplicationStartedEvent事件
+//   - 启动健康检查
+//
+// 4. 运行阶段：应用正常运行
+//   - 处理请求
+//   - 定期执行健康检查
+//   - 监听关闭信号
+//
+// 5. 关闭阶段：优雅停止应用
+//   - 发布ApplicationStoppingEvent事件
+//   - 反向顺序停止组件
+//   - 释放资源
+//   - 发布ApplicationStoppedEvent事件
+//
+// # 使用示例
+//
+//	package main
+//
+//	import (
+//	    "github.com/guanzhenxing/go-snap/boot"
+//	    "github.com/guanzhenxing/go-snap/web"
+//	)
+//
+//	func main() {
+//	    // 创建启动器
+//	    bootApp := boot.NewBoot()
+//
+//	    // 配置启动器
+//	    bootApp.SetConfigPath("./config")
+//	    bootApp.AddComponent(&MyCustomComponent{})
+//
+//	    // 运行应用
+//	    if err := bootApp.Run(); err != nil {
+//	        panic(err)
+//	    }
+//	}
+//
+// # 扩展点
+//
+// 应用程序提供以下主要扩展点：
+//
+// 1. 组件 (Component)：实现特定功能的单元
+// 2. 自动配置器 (AutoConfigurer)：负责自动配置特定类型的组件
+// 3. 组件激活器 (ComponentActivator)：控制组件是否被激活
+// 4. 插件 (Plugin)：提供一组相关功能的捆绑包
 package boot
 
 import (
@@ -11,15 +77,35 @@ import (
 )
 
 // Boot 应用启动器
+// 是应用程序的主要入口点，负责配置和启动应用
+// 提供流式API，允许链式调用配置方法
 type Boot struct {
-	configPath  string
-	components  []Component
-	plugins     []Plugin
+	// configPath 配置文件所在路径
+	configPath string
+
+	// components 用户定义的组件列表
+	components []Component
+
+	// plugins 用户定义的插件列表
+	plugins []Plugin
+
+	// configurers 自定义配置器列表
 	configurers []AutoConfigurer
-	activators  []ComponentActivator
+
+	// activators 组件激活器列表
+	activators []ComponentActivator
 }
 
 // NewBoot 创建启动器
+// 返回一个配置了默认值的Boot实例
+//
+// 默认配置：
+//   - configPath: "configs"
+//   - 空的组件、插件、配置器和激活器列表
+//
+// 示例：
+//
+//	bootApp := boot.NewBoot()
 func NewBoot() *Boot {
 	return &Boot{
 		configPath:  "configs",
@@ -31,36 +117,116 @@ func NewBoot() *Boot {
 }
 
 // SetConfigPath 设置配置路径
+// 指定配置文件所在的目录路径
+//
+// 参数：
+//   - path: 配置文件目录的路径
+//
+// 返回：
+//   - *Boot: 启动器实例，用于链式调用
+//
+// 示例：
+//
+//	bootApp.SetConfigPath("./configs")
 func (b *Boot) SetConfigPath(path string) *Boot {
 	b.configPath = path
 	return b
 }
 
 // AddComponent 添加自定义组件
+// 将组件实例添加到应用中
+//
+// 参数：
+//   - component: 实现Component接口的组件实例
+//
+// 返回：
+//   - *Boot: 启动器实例，用于链式调用
+//
+// 示例：
+//
+//	bootApp.AddComponent(&MyDbComponent{})
+//	      .AddComponent(&MyWebComponent{})
 func (b *Boot) AddComponent(component Component) *Boot {
 	b.components = append(b.components, component)
 	return b
 }
 
 // AddPlugin 添加插件
+// 将插件添加到应用中
+//
+// 参数：
+//   - plugin: 实现Plugin接口的插件实例
+//
+// 返回：
+//   - *Boot: 启动器实例，用于链式调用
+//
+// 插件与组件的区别：
+//   - 组件是单一功能单元
+//   - 插件可以注册多个组件和配置器
+//
+// 示例：
+//
+//	bootApp.AddPlugin(myplugin.New())
 func (b *Boot) AddPlugin(plugin Plugin) *Boot {
 	b.plugins = append(b.plugins, plugin)
 	return b
 }
 
 // AddConfigurer 添加配置器
+// 将自定义配置器添加到应用中
+//
+// 参数：
+//   - configurer: 实现AutoConfigurer接口的配置器实例
+//
+// 返回：
+//   - *Boot: 启动器实例，用于链式调用
+//
+// 示例：
+//
+//	bootApp.AddConfigurer(&MyCustomConfigurer{})
 func (b *Boot) AddConfigurer(configurer AutoConfigurer) *Boot {
 	b.configurers = append(b.configurers, configurer)
 	return b
 }
 
 // AddActivator 添加激活器
+// 将组件激活器添加到应用中
+//
+// 参数：
+//   - activator: 实现ComponentActivator接口的激活器实例
+//
+// 返回：
+//   - *Boot: 启动器实例，用于链式调用
+//
+// 激活器用于控制组件是否应该被激活，可以基于条件判断
+//
+// 示例：
+//
+//	// 只在开发环境激活某些组件
+//	bootApp.AddActivator(&DevEnvActivator{})
 func (b *Boot) AddActivator(activator ComponentActivator) *Boot {
 	b.activators = append(b.activators, activator)
 	return b
 }
 
 // Run 运行应用
+// 创建并启动应用程序，会阻塞直到应用关闭
+//
+// 返回：
+//   - error: 启动过程中遇到的错误，如果正常关闭则返回nil
+//
+// 执行流程：
+//  1. 创建应用实例
+//  2. 初始化所有组件
+//  3. 启动所有组件
+//  4. 等待关闭信号
+//  5. 优雅关闭应用
+//
+// 示例：
+//
+//	if err := bootApp.Run(); err != nil {
+//	    log.Fatalf("应用启动失败: %v", err)
+//	}
 func (b *Boot) Run() error {
 	// 创建应用
 	app, err := b.createApplication()
@@ -73,6 +239,28 @@ func (b *Boot) Run() error {
 }
 
 // Initialize 初始化应用并返回应用实例（不启动）
+// 与Run不同，此方法仅初始化应用但不启动组件
+//
+// 返回：
+//   - *Application: 初始化后的应用实例
+//   - error: 初始化过程中遇到的错误
+//
+// 使用场景：
+//   - 需要在启动前执行自定义操作
+//   - 单元测试中模拟应用环境
+//
+// 示例：
+//
+//	app, err := bootApp.Initialize()
+//	if err != nil {
+//	    log.Fatalf("应用初始化失败: %v", err)
+//	}
+//
+//	// 执行自定义操作
+//
+//	if err := app.Run(); err != nil {
+//	    log.Fatalf("应用运行失败: %v", err)
+//	}
 func (b *Boot) Initialize() (*Application, error) {
 	// 创建应用
 	app, err := b.createApplication()
@@ -89,6 +277,19 @@ func (b *Boot) Initialize() (*Application, error) {
 }
 
 // createApplication 创建应用实例
+// 配置应用程序并注册标准和自定义组件
+//
+// 返回：
+//   - *Application: 创建的应用实例
+//   - error: 创建过程中遇到的错误
+//
+// 内部执行流程：
+//  1. 创建Application实例
+//  2. 添加标准配置器
+//  3. 添加自定义配置器
+//  4. 添加激活器
+//  5. 注册自定义组件
+//  6. 注册插件
 func (b *Boot) createApplication() (*Application, error) {
 	// 创建应用
 	app, err := NewApplication(b.configPath)
@@ -131,43 +332,111 @@ func (b *Boot) createApplication() (*Application, error) {
 }
 
 // Application 应用类
+// 表示一个运行中的应用实例，管理组件生命周期和应用状态
 type Application struct {
-	name            string
-	version         string
-	registry        *ComponentRegistry
-	propSource      PropertySource
-	autoConfig      *AutoConfig
-	eventBus        *EventBus
-	ctx             context.Context
-	cancel          context.CancelFunc
-	state           AppState
-	stateMu         sync.RWMutex
-	shutdownCh      chan os.Signal
+	// name 应用名称
+	name string
+
+	// version 应用版本
+	version string
+
+	// registry 组件注册表，管理所有组件
+	registry *ComponentRegistry
+
+	// propSource 属性源，提供配置
+	propSource PropertySource
+
+	// autoConfig 自动配置引擎
+	autoConfig *AutoConfig
+
+	// eventBus 事件总线，用于组件间通信
+	eventBus *EventBus
+
+	// ctx 应用上下文，用于控制生命周期
+	ctx context.Context
+
+	// cancel 取消函数，用于停止应用
+	cancel context.CancelFunc
+
+	// state 当前应用状态
+	state AppState
+
+	// stateMu 保护状态访问的互斥锁
+	stateMu sync.RWMutex
+
+	// shutdownCh 关闭信号通道
+	shutdownCh chan os.Signal
+
+	// shutdownTimeout 关闭超时时间（秒）
 	shutdownTimeout int
-	healthChecker   *ApplicationHealthChecker
-	metrics         *ApplicationMetrics
+
+	// healthChecker 健康检查器
+	healthChecker *ApplicationHealthChecker
+
+	// metrics 应用指标
+	metrics *ApplicationMetrics
 }
 
 // ApplicationHealthChecker 应用健康检查器
+// 负责定期检查所有组件的健康状态
 type ApplicationHealthChecker struct {
-	registry      *ComponentRegistry
+	// registry 组件注册表的引用
+	registry *ComponentRegistry
+
+	// checkInterval 检查间隔时间
 	checkInterval time.Duration
-	stopCh        chan struct{}
-	mutex         sync.RWMutex
-	lastCheck     time.Time
-	healthStatus  map[string]error
+
+	// stopCh 停止通道，用于停止健康检查
+	stopCh chan struct{}
+
+	// mutex 保护健康状态的互斥锁
+	mutex sync.RWMutex
+
+	// lastCheck 上次检查时间
+	lastCheck time.Time
+
+	// healthStatus 最近的健康检查结果
+	healthStatus map[string]error
 }
 
 // ApplicationMetrics 应用指标
+// 收集应用运行时的各种指标数据
 type ApplicationMetrics struct {
-	StartTime        time.Time
-	ComponentCount   int
+	// StartTime 应用启动时间
+	StartTime time.Time
+
+	// ComponentCount 组件数量
+	ComponentCount int
+
+	// HealthCheckCount 健康检查次数
 	HealthCheckCount int
-	ErrorCount       int
-	mutex            sync.RWMutex
+
+	// ErrorCount 错误数量
+	ErrorCount int
+
+	// mutex 保护指标的互斥锁
+	mutex sync.RWMutex
 }
 
 // NewApplication 创建应用
+// 初始化应用程序的基础设施组件
+//
+// 参数：
+//   - configPath: 配置文件路径
+//
+// 返回：
+//   - *Application: 创建的应用实例
+//   - error: 创建过程中遇到的错误
+//
+// 内部执行流程：
+//  1. 创建上下文和取消函数
+//  2. 加载属性源
+//  3. 加载环境变量
+//  4. 创建组件注册表
+//  5. 创建事件总线
+//  6. 创建自动配置引擎
+//  7. 创建健康检查器
+//  8. 初始化应用指标
 func NewApplication(configPath string) (*Application, error) {
 	// 创建上下文
 	ctx, cancel := context.WithCancel(context.Background())

@@ -1,5 +1,66 @@
 // Package errors 提供简单且强大的错误处理原语。
 //
+// # 概述
+//
+// 本包扩展了Go标准库的错误处理功能，实现了基于链式错误（error chain）的错误处理机制。
+// 它提供了以下核心功能：
+//   - 错误链和上下文：在保留原始错误的同时添加上下文信息
+//   - 堆栈跟踪：自动捕获错误发生位置的完整调用栈
+//   - 错误码系统：支持统一的错误码管理，便于API开发和客户端错误处理
+//   - 错误上下文：支持为错误附加键值对形式的上下文数据
+//   - 与标准库兼容：完全兼容Go 1.13+的错误处理机制（errors.Is, errors.As, errors.Unwrap）
+//
+// # 最佳实践
+//
+//  1. 使用Wrap/Wrapf在错误传播过程中添加上下文信息，而不是简单地返回原始错误
+//     错误：return err
+//     正确：return errors.Wrap(err, "读取配置文件失败")
+//
+//  2. 使用WithCode/WrapWithCode在API边界处为错误添加错误码
+//     例如：return errors.WithCode(UserNotFound, "用户 %s 不存在", username)
+//
+//  3. 使用Cause获取错误链中的根本原因
+//     例如：rootErr := errors.Cause(err)
+//
+//  4. 使用错误码进行错误比较，而不是直接比较错误实例
+//     错误：if err == ErrNotFound { ... }
+//     正确：if errors.IsErrorCode(err, NotFound) { ... }
+//
+//  5. 为关键错误添加上下文信息
+//     例如：err = errors.WithContext(err, "request_id", requestID)
+//
+//  6. 在高性能场景中，谨慎选择堆栈捕获模式
+//     例如：errors.DefaultStackCaptureMode = errors.StackCaptureModeNever
+//
+// # 性能考虑
+//
+// - 创建错误时捕获堆栈跟踪会产生一定的性能开销
+// - 对于高频创建错误的场景，可以使用StackCaptureModeNever或StackCaptureModeModeSampled模式
+// - 错误格式化（特别是带堆栈跟踪的）是相对昂贵的操作，应该主要用于调试和日志记录
+// - 使用WithContext添加错误上下文比创建新的错误包装更高效
+//
+// # 与标准库的关系
+//
+// 本包完全兼容Go 1.13+的错误处理机制。具体表现为：
+//   - 实现了Unwrap()方法，支持errors.Is和errors.As
+//   - 提供了与标准库行为一致但功能更强的Is和As函数
+//   - 可以与标准库的errors.New、fmt.Errorf等函数创建的错误互操作
+//
+// # 与其他错误处理库的对比
+//
+// 本包的设计受到了pkg/errors和github.com/cockroachdb/errors的影响，但提供了更多功能：
+//   - 比pkg/errors增加了错误码、错误上下文和堆栈优化
+//   - 比标准库更易用，提供了更多错误处理原语
+//   - 比大多数错误库提供了更细粒度的堆栈跟踪控制
+//
+// # 错误类型层次结构
+//
+// 本包定义了几个关键接口来表示不同类型的错误：
+//   - error：标准Go错误接口
+//   - ContextualError：扩展error，提供获取原始错误的方法
+//   - StackTracer：可以提供堆栈跟踪的错误
+//   - ErrorCode：提供错误码和HTTP状态码的错误
+//
 // Go中传统的错误处理习惯大致如下：
 //
 //	if err != nil {
@@ -86,15 +147,17 @@ import (
 //=====================================================
 
 // ContextualError 表示一个带有附加上下文的错误。
+// 该接口扩展了标准error接口，提供了获取原始错误的方法。
 type ContextualError interface {
 	error
-	Cause() error
-	Unwrap() error
+	Cause() error  // 获取原始错误
+	Unwrap() error // 兼容Go 1.13+的错误链
 }
 
 // StackTracer 是可以提供堆栈跟踪的错误接口。
+// 实现此接口的错误可以返回完整的调用堆栈信息。
 type StackTracer interface {
-	StackTrace() StackTrace
+	StackTrace() StackTrace // 返回堆栈跟踪信息
 }
 
 //=====================================================
@@ -102,27 +165,33 @@ type StackTracer interface {
 //=====================================================
 
 // contextualError 表示一个统一的错误结构，带有可选的堆栈跟踪、原因和错误码。
+// 该结构是包内部的核心错误实现，支持错误链、堆栈跟踪和错误码等功能。
 type contextualError struct {
-	msg     string
-	err     error
-	code    int
-	stack   StackProvider
-	context map[string]interface{}
+	msg     string                 // 错误消息
+	err     error                  // 原始错误
+	code    int                    // 错误码
+	stack   StackProvider          // 堆栈提供者
+	context map[string]interface{} // 错误上下文信息
 }
 
 // Error 返回错误消息。
+// 实现标准error接口。
 func (ce *contextualError) Error() string { return ce.msg }
 
 // Cause 返回错误的底层原因。
+// 实现ContextualError接口。
 func (ce *contextualError) Cause() error { return ce.err }
 
 // Unwrap 提供与Go 1.13+错误链的兼容性。
+// 用于支持标准库的errors.Is和errors.As功能。
 func (ce *contextualError) Unwrap() error { return ce.err }
 
 // Code 返回错误码（如果已设置），否则返回0。
+// 用于API错误处理和客户端错误识别。
 func (ce *contextualError) Code() int { return ce.code }
 
 // StackTrace 返回堆栈跟踪。
+// 实现StackTracer接口，允许访问完整的调用栈。
 func (ce *contextualError) StackTrace() StackTrace {
 	if ce.stack == nil {
 		return nil
@@ -131,6 +200,12 @@ func (ce *contextualError) StackTrace() StackTrace {
 }
 
 // Format 实现fmt.Formatter接口，用于格式化打印错误。
+// 支持多种格式化选项，特别是详细的堆栈跟踪打印。
+// 格式选项：
+//   - %s: 仅打印错误消息
+//   - %v: 打印错误消息
+//   - %+v: 打印详细信息，包括完整的错误链和堆栈跟踪
+//   - %-v: 打印详细信息，但不包括堆栈跟踪
 func (ce *contextualError) Format(s fmt.State, verb rune) {
 	switch verb {
 	case 'v':
@@ -151,6 +226,7 @@ func (ce *contextualError) Format(s fmt.State, verb rune) {
 
 // Is 方法实现了标准库errors.Is的功能，用于错误比较。
 // 如果目标错误是一个错误码，则比较错误码；否则委托给标准库errors.Is。
+// 这使得使用errors.Is可以检查错误码相等性。
 func (ce *contextualError) Is(target error) bool {
 	// 如果目标错误是一个错误码
 	if codeErr, ok := target.(interface{ Code() int }); ok {
@@ -171,6 +247,7 @@ func (ce *contextualError) Is(target error) bool {
 // As 方法实现了标准库errors.As的功能，用于类型断言。
 // 如果目标类型是一个错误码接口，尝试将当前错误转换为目标类型；
 // 否则委托给底层错误的As方法或标准类型断言。
+// 这使得使用errors.As可以将错误转换为特定类型。
 func (ce *contextualError) As(target interface{}) bool {
 	// 尝试将自身类型匹配到target
 	if reflectAsTarget(ce, target) {
@@ -192,8 +269,6 @@ func (ce *contextualError) As(target interface{}) bool {
 		if stdErr, ok := ce.err.(interface{ As(interface{}) bool }); ok {
 			return stdErr.As(target)
 		}
-
-		// 尝试直接类型断言
 		return reflectAsTarget(ce.err, target)
 	}
 
@@ -201,6 +276,7 @@ func (ce *contextualError) As(target interface{}) bool {
 }
 
 // reflectAsTarget 使用反射帮助实现As方法的类型断言
+// 这是一个内部辅助函数，用于安全地将错误值转换为目标类型
 func reflectAsTarget(err error, target interface{}) bool {
 	val := reflect.ValueOf(target)
 	if val.Kind() != reflect.Ptr || val.IsNil() {
@@ -220,28 +296,35 @@ func reflectAsTarget(err error, target interface{}) bool {
 // 错误创建函数
 //=====================================================
 
-// New 返回带有提供消息和堆栈跟踪的错误。
-// 它是标准库errors.New的直接替代品，额外记录堆栈跟踪。
+// New 创建一个带有给定消息的新错误。
+// 这是errors.New的增强版本，支持堆栈跟踪。
+// 性能影响: 创建堆栈跟踪会产生少量开销，但通常可以忽略不计。
+// 在高性能场景中，可以使用NewWithStackControl调整堆栈捕获行为。
 //
 // 示例:
 //
-//	err := errors.New("连接被拒绝")
+//	err := errors.New("无法连接到服务器")
 func New(message string) error {
 	var stack StackProvider
 
 	switch DefaultStackCaptureMode {
 	case StackCaptureModeNever:
+		// 不捕获堆栈，最大化性能
 		stack = nil
 	case StackCaptureModeImmediate:
+		// 立即捕获堆栈
 		stack = callers()
 	case StackCaptureModeDeferred:
+		// 延迟捕获堆栈，仅在需要时捕获
 		stack = newLazyStack(3)
 	case StackCaptureModeModeSampled:
+		// 采样捕获，每N个错误捕获一次堆栈
 		counter := atomic.AddInt32(&stackSampleCounter, 1)
 		if counter%int32(SamplingRate) == 0 {
 			stack = callers()
 		}
 	default:
+		// 默认使用延迟捕获
 		stack = newLazyStack(3)
 	}
 
@@ -252,12 +335,13 @@ func New(message string) error {
 	}
 }
 
-// Errorf 根据格式说明符格式化并返回满足error的字符串值，同时记录堆栈跟踪。
-// 它是fmt.Errorf的直接替代品，额外记录堆栈跟踪。
+// Errorf 创建一个带有格式化消息的新错误。
+// 这是fmt.Errorf的增强版本，支持堆栈跟踪。
+// 与New类似，但支持格式化字符串。
 //
 // 示例:
 //
-//	err := errors.Errorf("连接到%s被拒绝", hostname)
+//	err := errors.Errorf("连接到 %s 失败", serverName)
 func Errorf(format string, args ...interface{}) error {
 	var stack StackProvider
 
@@ -288,8 +372,9 @@ func Errorf(format string, args ...interface{}) error {
 // 错误包装函数
 //=====================================================
 
-// WithStack 为err添加调用WithStack时的堆栈跟踪。
-// 如果err为nil，WithStack返回nil。
+// WithStack 为现有错误添加堆栈跟踪。
+// 如果错误已经有堆栈跟踪，则保留原始堆栈。
+// 适用于需要保留原始错误但添加堆栈信息的场景。
 //
 // 示例:
 //
@@ -325,14 +410,15 @@ func WithStack(err error) error {
 	}
 }
 
-// Wrap 返回一个错误，它在调用Wrap的位置为err添加堆栈跟踪和提供的消息。
-// 如果err为nil，Wrap返回nil。
+// Wrap 将错误包装在新的错误中，添加消息和堆栈跟踪。
+// 这是错误处理的推荐方法，允许在调用链中添加上下文。
+// 如果原始错误为nil，返回nil。
 //
 // 示例:
 //
-//	err := db.Query()
+//	file, err := os.Open(path)
 //	if err != nil {
-//	    return errors.Wrap(err, "查询数据库失败")
+//	    return errors.Wrap(err, "打开配置文件失败")
 //	}
 func Wrap(err error, message string) error {
 	if err == nil {
@@ -364,14 +450,15 @@ func Wrap(err error, message string) error {
 	}
 }
 
-// Wrapf 返回一个错误，它在调用Wrapf的位置为err添加堆栈跟踪和格式说明符。
-// 如果err为nil，Wrapf返回nil。
+// Wrapf 将错误包装在新的错误中，添加格式化消息和堆栈跟踪。
+// 与Wrap类似，但支持格式化字符串。
+// 如果原始错误为nil，返回nil。
 //
 // 示例:
 //
-//	err := db.Query()
+//	resp, err := http.Get(url)
 //	if err != nil {
-//	    return errors.Wrapf(err, "查询用户%s失败", username)
+//	    return errors.Wrapf(err, "请求URL %s失败", url)
 //	}
 func Wrapf(err error, format string, args ...interface{}) error {
 	if err == nil {
@@ -407,13 +494,13 @@ func Wrapf(err error, format string, args ...interface{}) error {
 // 错误码相关函数
 //=====================================================
 
-// NewWithCode 返回带有指定错误码和格式化消息的错误。
-// 这对于API开发提供一致的错误码非常有用。
+// NewWithCode 创建一个带有错误码的新错误。
+// 适用于API错误处理，允许客户端根据错误码进行不同处理。
+// 错误码应事先使用RegisterErrorCode注册。
 //
 // 示例:
 //
-//	const NotFound = 404
-//	return errors.NewWithCode(NotFound, "用户%s未找到", username)
+//	return errors.NewWithCode(InvalidParameter, "无效的用户ID: %s", userID)
 func NewWithCode(code int, format string, args ...interface{}) error {
 	return &contextualError{
 		msg:   fmt.Sprintf(format, args...),
@@ -422,15 +509,18 @@ func NewWithCode(code int, format string, args ...interface{}) error {
 	}
 }
 
-// WrapWithCode 返回一个错误，它为err添加指定的错误码和格式化消息。
-// 如果err为nil，WrapWithCode返回nil。
+// WrapWithCode 将错误包装在新的错误中，添加错误码、消息和堆栈跟踪。
+// 结合了Wrap和NewWithCode的功能。
+// 如果原始错误为nil，返回nil。
 //
 // 示例:
 //
-//	const DBError = 500
-//	err := db.Query()
+//	user, err := db.GetUser(userID)
 //	if err != nil {
-//	    return errors.WrapWithCode(err, DBError, "数据库故障")
+//	    if errors.Is(err, sql.ErrNoRows) {
+//	        return errors.WrapWithCode(err, NotFound, "用户 %s 不存在", userID)
+//	    }
+//	    return errors.Wrap(err, "查询用户失败")
 //	}
 func WrapWithCode(err error, code int, format string, args ...interface{}) error {
 	if err == nil {
@@ -456,13 +546,13 @@ func WrapWithCode(err error, code int, format string, args ...interface{}) error
 	}
 }
 
-// NewFromCode 从已有的ErrorCode创建一个带有该错误码的新错误。
-// 这对于使用已注册的错误码创建标准错误特别有用。
+// NewFromCode 从预定义的错误码创建一个新错误。
+// 使用注册的错误码信息，包括HTTP状态码和错误消息。
+// 适用于没有额外上下文的标准错误场景。
 //
 // 示例:
 //
-//	notFoundCode := errors.GetErrorCode(404)
-//	return errors.NewFromCodeInfo(notFoundCode)
+//	return errors.NewFromCode(NotFound)
 func NewFromCode(code ErrorCode) error {
 	return &contextualError{
 		msg:   code.Message(),
@@ -475,15 +565,16 @@ func NewFromCode(code ErrorCode) error {
 // 错误查询函数
 //=====================================================
 
-// Cause 返回错误的底层原因（如果可能）。
-// 如果错误实现了causer接口，则它有一个原因。
-// 如果错误未实现Cause，将返回原始错误。
-// 如果错误为nil，将不做进一步调查而返回nil。
+// Cause 获取错误链中的根本原因。
+// 遍历错误链，找到最底层的错误（即不再实现Cause()方法的错误）。
+// 这对于检查原始错误类型或与标准错误比较很有用。
 //
 // 示例:
 //
-//	err := errors.Wrap(originalErr, "额外上下文")
-//	originalErr == errors.Cause(err) // true
+//	err := doSomething()
+//	if errors.Cause(err) == io.EOF {
+//	    // 处理EOF错误
+//	}
 func Cause(err error) error {
 	type causer interface {
 		Cause() error
@@ -508,17 +599,14 @@ func Cause(err error) error {
 // 错误上下文函数
 //=====================================================
 
-// WithContext 为错误添加上下文信息，返回一个包含上下文的新错误。
-// 上下文信息以键值对的形式存储，可用于存储请求ID、用户ID等额外信息。
-// 如果err为nil，WithContext返回nil。
+// WithContext 为错误添加键值对形式的上下文信息。
+// 这些上下文信息可以用于日志记录、调试或错误处理。
+// 比创建新的错误包装更高效，不会添加新的堆栈跟踪。
 //
 // 示例:
 //
-//	err := db.Query()
-//	if err != nil {
-//	    // 添加请求ID作为上下文
-//	    return errors.WithContext(err, "request_id", requestID)
-//	}
+//	err = errors.WithContext(err, "user_id", userID)
+//	err = errors.WithContext(err, "request_id", requestID)
 func WithContext(err error, key string, value interface{}) error {
 	if err == nil {
 		return nil
@@ -556,19 +644,16 @@ func WithContext(err error, key string, value interface{}) error {
 	}
 }
 
-// WithContextMap 为错误添加多个上下文信息，返回一个包含上下文的新错误。
-// 如果err为nil，WithContextMap返回nil。
+// WithContextMap 为错误添加多个键值对形式的上下文信息。
+// 与WithContext类似，但一次可以添加多个上下文值。
 //
 // 示例:
 //
-//	err := db.Query()
-//	if err != nil {
-//	    // 添加多个上下文信息
-//	    return errors.WithContextMap(err, map[string]interface{}{
-//	        "request_id": requestID,
-//	        "user_id": userID,
-//	    })
-//	}
+//	err = errors.WithContextMap(err, map[string]interface{}{
+//	    "user_id": userID,
+//	    "request_id": requestID,
+//	    "operation": "user_create",
+//	})
 func WithContextMap(err error, contextMap map[string]interface{}) error {
 	if err == nil {
 		return nil
@@ -619,13 +704,13 @@ func WithContextMap(err error, contextMap map[string]interface{}) error {
 	}
 }
 
-// GetContext 从错误中获取特定键的上下文值。
-// 如果键不存在或错误不包含上下文信息，返回nil和false。
+// GetContext 从错误中获取特定的上下文值。
+// 遍历错误链，查找指定键的上下文值。
 //
 // 示例:
 //
 //	if requestID, ok := errors.GetContext(err, "request_id"); ok {
-//	    fmt.Printf("错误发生在请求 %v\n", requestID)
+//	    log.Printf("Error for request %v: %v", requestID, err)
 //	}
 func GetContext(err error, key string) (interface{}, bool) {
 	var ce *contextualError
@@ -636,14 +721,14 @@ func GetContext(err error, key string) (interface{}, bool) {
 	return nil, false
 }
 
-// GetAllContext 返回错误中的所有上下文信息。
-// 如果错误不包含上下文信息，返回空映射。
+// GetAllContext 获取错误链中的所有上下文信息。
+// 合并错误链中所有错误的上下文，较新的值会覆盖较旧的值。
 //
 // 示例:
 //
-//	context := errors.GetAllContext(err)
-//	for k, v := range context {
-//	    fmt.Printf("%s: %v\n", k, v)
+//	allContext := errors.GetAllContext(err)
+//	for k, v := range allContext {
+//	    log.Printf("Context %s: %v", k, v)
 //	}
 func GetAllContext(err error) map[string]interface{} {
 	var ce *contextualError
@@ -658,7 +743,17 @@ func GetAllContext(err error) map[string]interface{} {
 	return make(map[string]interface{})
 }
 
-// NewWithStackControl 创建一个带有指定堆栈模式的错误
+// NewWithStackControl 创建一个新错误，并精确控制堆栈捕获行为。
+// 这对于性能敏感的场景特别有用。
+// 支持的模式包括：Never、Deferred、Immediate和Sampled。
+//
+// 示例:
+//
+//	// 在高频操作中不捕获堆栈
+//	err := errors.NewWithStackControl("缓存未命中", errors.StackCaptureModeNever)
+//
+//	// 在关键点创建带完整堆栈的错误
+//	err := errors.NewWithStackControl("启动失败", errors.StackCaptureModeImmediate)
 func NewWithStackControl(message string, mode StackCaptureMode) error {
 	var stack StackProvider
 
@@ -687,27 +782,28 @@ func NewWithStackControl(message string, mode StackCaptureMode) error {
 // 标准兼容函数
 //=====================================================
 
-// Is 判断err错误链中是否包含目标错误target。
-// 这是对标准库errors.Is的包装，提供完全相同的功能。
+// Is 检查目标错误是否与给定错误匹配。
+// 实现与标准库errors.Is相同的功能，但增加了对错误码的支持。
+// 这使得可以检查错误码相等性。
 //
 // 示例:
 //
-//	if errors.Is(err, io.EOF) {
-//	    // 处理EOF错误
+//	if errors.Is(err, NotFoundError) {
+//	    // 处理未找到错误
 //	}
 func Is(err, target error) bool {
 	return stderrors.Is(err, target)
 }
 
-// As 查找err错误链中与target类型匹配的第一个错误，如果找到则将其值设置到target并返回true。
-// target必须是一个指向实现了error接口的类型的非空指针，如*MyError。
-// 这是对标准库errors.As的包装，提供完全相同的功能。
+// As 尝试将错误转换为特定类型。
+// 实现与标准库errors.As相同的功能，但增加了对错误码的支持。
+// 目标必须是一个非nil指针。
 //
 // 示例:
 //
-//	var myErr *MyError
-//	if errors.As(err, &myErr) {
-//	    // 处理myErr
+//	var apiErr *APIError
+//	if errors.As(err, &apiErr) {
+//	    fmt.Printf("API错误: %d", apiErr.Code())
 //	}
 func As(err error, target interface{}) bool {
 	return stderrors.As(err, target)

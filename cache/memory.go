@@ -1,3 +1,20 @@
+// Package cache 提供统一的缓存接口和多种实现
+// 内存缓存实现提供了高性能的本地内存缓存，支持TTL过期、标签索引和模式匹配删除等功能
+// 适用场景：
+// - 单机应用中需要临时存储的数据
+// - 需要高性能且不关心持久化的缓存
+// - 作为分布式缓存的本地一级缓存
+//
+// 性能特性：
+// - 读取操作使用读写锁的读锁，多个并发读取不会阻塞
+// - 写入操作使用读写锁的写锁，会阻塞所有读写操作
+// - 标签索引提供了O(1)时间复杂度的标签查找
+// - 过期清理由后台goroutine定期执行，不影响正常操作
+//
+// 限制：
+// - 所有数据存储在内存中，重启后数据会丢失
+// - 不适合存储大量数据，可能导致内存压力
+// - 不支持跨实例的数据共享
 package cache
 
 import (
@@ -9,22 +26,57 @@ import (
 )
 
 // MemoryCache 实现基于内存的缓存
+// 提供线程安全的内存键值存储，支持TTL、标签和模式匹配等功能
+// 使用读写锁保护并发访问，适合读多写少的场景
 type MemoryCache struct {
-	items    map[string]*memoryItem
-	mu       sync.RWMutex
-	janitor  *janitor
-	options  Options
-	tagIndex map[string]map[string]struct{} // 标签到键的映射
-	tagMu    sync.RWMutex
+	// items 存储缓存项的映射，键为缓存键，值为缓存项
+	items map[string]*memoryItem
+	// mu 保护items的读写锁
+	mu sync.RWMutex
+	// janitor 后台清理过期项的清理器
+	janitor *janitor
+	// options 缓存选项
+	options Options
+	// tagIndex 标签索引，将标签映射到使用该标签的所有键
+	// 提供O(1)时间复杂度的标签查找
+	tagIndex map[string]map[string]struct{}
+	// tagMu 保护标签索引的读写锁
+	tagMu sync.RWMutex
 }
 
+// memoryItem 内存缓存项，存储值和元数据
 type memoryItem struct {
-	Value      interface{}
-	Expiration int64 // Unix 纳秒时间戳
-	Tags       []string
+	// Value 缓存的实际值
+	Value interface{}
+	// Expiration 过期时间（Unix纳秒时间戳），0表示永不过期
+	Expiration int64
+	// Tags 该缓存项关联的标签列表
+	Tags []string
 }
 
 // NewMemoryCache 创建新的内存缓存实例
+// 参数：
+//
+//	opts: 缓存选项，如果提供多个，只使用第一个；如果不提供，使用默认选项
+//
+// 返回：
+//
+//	*MemoryCache: 配置好的内存缓存实例
+//
+// 注意：
+//   - 如果CleanupInterval大于0，会启动后台清理goroutine
+//   - 应在不再使用缓存时调用Close方法停止清理goroutine
+//
+// 示例：
+//
+//	// 创建使用默认选项的缓存
+//	cache := cache.NewMemoryCache()
+//
+//	// 创建自定义选项的缓存
+//	cache := cache.NewMemoryCache(cache.Options{
+//	    DefaultTTL: time.Minute * 5,
+//	    CleanupInterval: time.Minute,
+//	})
 func NewMemoryCache(opts ...Options) *MemoryCache {
 	var options Options
 	if len(opts) > 0 {
@@ -49,6 +101,27 @@ func NewMemoryCache(opts ...Options) *MemoryCache {
 }
 
 // Get 从缓存中检索值
+// 参数：
+//
+//	ctx: 上下文（本实现中未使用，但保留以兼容接口）
+//	key: 要检索的缓存键
+//
+// 返回：
+//
+//	interface{}: 缓存值，如果未找到则为nil
+//	bool: 是否找到缓存，true表示找到，false表示未找到或已过期
+//
+// 性能：
+//   - 使用读锁，多个并发读取不会相互阻塞
+//   - 时间复杂度：O(1)
+//
+// 示例：
+//
+//	value, found := cache.Get(context.Background(), "user:123")
+//	if found {
+//	    user := value.(*User)
+//	    // 使用用户数据
+//	}
 func (c *MemoryCache) Get(_ context.Context, key string) (interface{}, bool) {
 	c.mu.RLock()
 	defer c.mu.RUnlock()
@@ -67,6 +140,23 @@ func (c *MemoryCache) Get(_ context.Context, key string) (interface{}, bool) {
 }
 
 // GetWithTTL 获取值和剩余TTL
+// 参数：
+//
+//	ctx: 上下文（本实现中未使用，但保留以兼容接口）
+//	key: 要检索的缓存键
+//
+// 返回：
+//
+//	interface{}: 缓存值，如果未找到则为nil
+//	time.Duration: 剩余生存时间，如果永不过期则为-1，如果未找到则为0
+//	bool: 是否找到缓存，true表示找到，false表示未找到或已过期
+//
+// 示例：
+//
+//	value, ttl, found := cache.GetWithTTL(context.Background(), "session:abc")
+//	if found {
+//	    fmt.Printf("会话将在 %v 后过期\n", ttl)
+//	}
 func (c *MemoryCache) GetWithTTL(_ context.Context, key string) (interface{}, time.Duration, bool) {
 	c.mu.RLock()
 	defer c.mu.RUnlock()
@@ -93,6 +183,32 @@ func (c *MemoryCache) GetWithTTL(_ context.Context, key string) (interface{}, ti
 }
 
 // Set 设置缓存值
+// 参数：
+//
+//	ctx: 上下文（本实现中未使用，但保留以兼容接口）
+//	key: 缓存键
+//	value: 要存储的值
+//	ttl: 生存时间，0表示使用默认TTL，负数表示永不过期
+//
+// 返回：
+//
+//	error: 操作过程中遇到的错误，本实现始终返回nil
+//
+// 注意：
+//   - 如果键已存在，会更新值和过期时间，并清除旧的标签关联
+//   - 使用此方法设置的项没有标签，如需标签请使用SetItem
+//
+// 性能：
+//   - 使用写锁，会阻塞所有读写操作
+//   - 如果键已存在且有标签，会有额外的标签索引更新开销
+//
+// 示例：
+//
+//	// 设置带1分钟过期时间的缓存
+//	cache.Set(context.Background(), "counter", 42, time.Minute)
+//
+//	// 设置永不过期的缓存
+//	cache.Set(context.Background(), "app:config", config, -1)
 func (c *MemoryCache) Set(_ context.Context, key string, value interface{}, ttl time.Duration) error {
 	var exp int64
 	if ttl > 0 {
@@ -118,6 +234,31 @@ func (c *MemoryCache) Set(_ context.Context, key string, value interface{}, ttl 
 }
 
 // SetItem 设置带完整选项的缓存项
+// 参数：
+//
+//	ctx: 上下文（本实现中未使用，但保留以兼容接口）
+//	key: 缓存键
+//	item: 包含值、过期时间和标签的缓存项
+//
+// 返回：
+//
+//	error: 操作过程中遇到的错误，本实现始终返回nil
+//
+// 注意：
+//   - 相比Set方法，此方法支持设置标签
+//   - 如果键已存在，会完全替换旧项，包括更新标签索引
+//
+// 边界条件：
+//   - 标签数量不宜过多，每个标签都会在标签索引中占用内存
+//   - 大量使用相同标签的项可能导致删除标签时性能下降
+//
+// 示例：
+//
+//	cache.SetItem(context.Background(), "user:123", &cache.Item{
+//	    Value: user,
+//	    Expiration: time.Hour,
+//	    Tags: []string{"user", "active"},
+//	})
 func (c *MemoryCache) SetItem(_ context.Context, key string, item *Item) error {
 	var exp int64
 	if item.Expiration > 0 {
@@ -148,6 +289,22 @@ func (c *MemoryCache) SetItem(_ context.Context, key string, item *Item) error {
 }
 
 // Delete 从缓存中删除项
+// 参数：
+//
+//	ctx: 上下文（本实现中未使用，但保留以兼容接口）
+//	key: 要删除的缓存键
+//
+// 返回：
+//
+//	error: 操作过程中遇到的错误，本实现始终返回nil
+//
+// 注意：
+//   - 如果键不存在，操作无效但不会返回错误
+//   - 删除操作会同时更新标签索引
+//
+// 示例：
+//
+//	cache.Delete(context.Background(), "user:123")
 func (c *MemoryCache) Delete(_ context.Context, key string) error {
 	c.mu.Lock()
 	defer c.mu.Unlock()
@@ -162,6 +319,29 @@ func (c *MemoryCache) Delete(_ context.Context, key string) error {
 }
 
 // DeleteByPattern 根据正则表达式模式删除缓存
+// 参数：
+//
+//	ctx: 上下文（本实现中未使用，但保留以兼容接口）
+//	pattern: 正则表达式模式字符串
+//
+// 返回：
+//
+//	error: 如果正则表达式无效则返回错误，否则返回nil
+//
+// 性能：
+//   - 时间复杂度：O(n)，其中n为缓存项数量
+//   - 对于大量缓存项，此操作可能较慢且占用写锁时间较长
+//
+// 安全：
+//   - 复杂的正则表达式可能导致性能问题，请谨慎使用
+//
+// 示例：
+//
+//	// 删除所有用户缓存
+//	cache.DeleteByPattern(context.Background(), "^user:")
+//
+//	// 删除特定ID范围的项
+//	cache.DeleteByPattern(context.Background(), "item:[1-9][0-9]$")
 func (c *MemoryCache) DeleteByPattern(_ context.Context, pattern string) error {
 	re, err := regexp.Compile(pattern)
 	if err != nil {
@@ -182,6 +362,23 @@ func (c *MemoryCache) DeleteByPattern(_ context.Context, pattern string) error {
 }
 
 // DeleteByTag 删除特定标签的所有缓存
+// 参数：
+//
+//	ctx: 上下文（本实现中未使用，但保留以兼容接口）
+//	tag: 标签名称
+//
+// 返回：
+//
+//	error: 操作过程中遇到的错误，本实现始终返回nil
+//
+// 性能：
+//   - 标签索引提供O(1)时间复杂度的标签查找
+//   - 实际删除时间与使用该标签的缓存项数量成正比
+//
+// 示例：
+//
+//	// 删除所有带"admin"标签的缓存
+//	cache.DeleteByTag(context.Background(), "admin")
 func (c *MemoryCache) DeleteByTag(_ context.Context, tag string) error {
 	c.tagMu.RLock()
 	keys, exists := c.tagIndex[tag]
